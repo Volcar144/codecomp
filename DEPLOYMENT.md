@@ -90,26 +90,66 @@ vercel --prod
 4. Add all environment variables in project settings
 5. Deploy!
 
-## Step 4: Set Up Code Execution (Production)
+## Step 4: Code Execution Configuration
 
-The current implementation uses mock code execution. For production, integrate with:
+The application now uses **Piston API** for real code execution.
 
-### Option 1: Judge0 (Recommended)
+### Using Public Piston Instance (Development)
 
-1. Sign up for Judge0 CE or deploy your own instance
-2. Add Judge0 API URL to `CODE_EXECUTION_API_URL`
-3. Update `/app/api/execute/route.ts` to use Judge0 API
+The app is pre-configured to use the public Piston instance. No additional setup needed.
 
-### Option 2: Piston
+### Self-Hosting Piston (Production - Recommended)
 
-1. Deploy Piston: https://github.com/engineer-man/piston
-2. Update execute route to use Piston API
+For production, self-host Piston for better control and reliability:
 
-### Option 3: Custom Docker Solution
+**Option 1: Docker**
+```bash
+docker run -d \
+  --name piston \
+  -p 2000:2000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/engineer-man/piston
+```
 
-1. Set up isolated Docker containers
-2. Implement sandboxed execution
-3. Add resource limits and security measures
+**Option 2: Docker Compose**
+```yaml
+version: '3.8'
+services:
+  piston:
+    image: ghcr.io/engineer-man/piston
+    ports:
+      - "2000:2000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+```
+
+Then update your environment variable:
+```env
+CODE_EXECUTION_API_URL=http://your-server:2000/api/v2/piston
+```
+
+### Alternative: Judge0
+
+If you prefer Judge0:
+
+1. Deploy Judge0: https://github.com/judge0/judge0
+2. Update `/lib/code-execution.ts` to use Judge0 API format
+3. Set `CODE_EXECUTION_API_URL` to your Judge0 instance
+
+### Execution Security
+
+Current configuration:
+- ✅ Sandboxed execution (Piston containers)
+- ✅ 10-second compile timeout
+- ✅ 5-second run timeout
+- ✅ No network access in containers
+- ✅ Resource limits enforced by Docker
+
+For additional security:
+- Use a separate execution server
+- Implement rate limiting
+- Add request authentication
+- Monitor execution patterns
 
 ## Step 5: Configure GitHub OAuth (Optional)
 

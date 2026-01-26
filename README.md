@@ -111,11 +111,44 @@ The application uses the following main tables:
 
 ## Code Execution
 
-The current implementation uses mock code execution for demonstration purposes. For production, you should integrate with a sandboxed execution environment such as:
+The application now uses **Piston API** for real code execution in a sandboxed environment.
 
-- [Judge0](https://judge0.com/) - Online code execution API
-- [Piston](https://github.com/engineer-man/piston) - High-performance code execution engine
-- Custom Docker-based solution
+### Default Configuration
+
+By default, the app uses the public Piston instance at `https://emkc.org/api/v2/piston`.
+
+### Self-Hosting (Recommended for Production)
+
+For production use, we recommend self-hosting Piston:
+
+```bash
+# Using Docker
+docker run -d \
+  -p 2000:2000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/engineer-man/piston
+```
+
+Then set in your `.env.local`:
+```env
+CODE_EXECUTION_API_URL=http://your-piston-instance:2000/api/v2/piston
+```
+
+### Supported Languages
+
+- Python 3.10.0
+- JavaScript (Node.js 18.15.0)
+- Java 15.0.2
+- C++ 10.2.0
+- C# 6.12.0
+- Go 1.16.2
+- Rust 1.68.2
+
+### Execution Limits
+
+- Compile timeout: 10 seconds
+- Run timeout: 5 seconds
+- Total request timeout: 15 seconds
 
 To integrate a real execution engine, modify `/app/api/execute/route.ts`.
 
@@ -132,7 +165,7 @@ To integrate a real execution engine, modify `/app/api/execute/route.ts`.
 - ✅ Judge Assignment (database schema)
 - ✅ User Dashboard
 - ✅ Documentation Page
-- ⚠️ Code Execution (Mock - needs production implementation)
+- ✅ **Code Execution (Piston API - real sandboxed execution)**
 - 🔄 Redis/Cron Integration (Optional - for caching and scheduled tasks)
 
 ## Screenshots

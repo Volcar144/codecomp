@@ -48,14 +48,16 @@
 └─────────────────────────────────────────────────────────────┘
                             ↕
 ┌─────────────────────────────────────────────────────────────┐
-│              Code Execution Layer (External)                │
+│              Code Execution Layer (Piston API)              │
 ├─────────────────────────────────────────────────────────────┤
-│  Options:                                                   │
-│  • Judge0 API (recommended)                                 │
-│  • Piston Engine                                            │
-│  • Custom Docker Solution                                   │
+│  Implementation:                                            │
+│  • Piston API (https://github.com/engineer-man/piston)     │
+│  • Sandboxed Docker containers                              │
+│  • Support for 7 languages                                  │
+│  • Compile timeout: 10s, Run timeout: 5s                    │
 │                                                             │
-│  Current: Mock Implementation (for development)             │
+│  Default: Public instance (emkc.org)                        │
+│  Production: Self-hosted recommended                        │
 └─────────────────────────────────────────────────────────────┘
                             ↕
 ┌─────────────────────────────────────────────────────────────┐
@@ -82,7 +84,7 @@ User → Create Form → API Route → Validation → Database → Competition P
 
 ### 3. Code Submission Flow
 ```
-User → Code Editor → Run Tests → Execute API → Mock Execution → Results
+User → Code Editor → Run Tests → Execute API → Piston API → Sandboxed Execution → Results
                    ↓
                Submit Code → Submissions API → Database → Leaderboard Update
 ```
@@ -128,6 +130,7 @@ codecomp/
 │
 ├── lib/                         # Utilities & Config
 │   ├── auth.ts                  # BetterAuth config
+│   ├── code-execution.ts        # Piston API integration
 │   └── supabase.ts              # Supabase client & types
 │
 ├── public/                      # Static assets
@@ -272,14 +275,11 @@ codecomp/
 
 ## FAQ
 
-**Q: Can I use this for production?**
-A: Yes, after setting up the database and integrating a code execution service.
-
-**Q: How do I add new programming languages?**
-A: Add to the LANGUAGES array in create competition page and update the execution engine.
-
 **Q: Is the code execution secure?**
-A: The mock implementation is safe. Production needs sandboxed execution (Judge0/Piston).
+A: Yes. Code runs in sandboxed Piston Docker containers with time limits and no network access.
+
+**Q: Can I use this for production?**
+A: Yes. For production, self-host Piston for better control and reliability.
 
 **Q: Can I self-host everything?**
 A: Yes, you can self-host the app, database, and execution engine.

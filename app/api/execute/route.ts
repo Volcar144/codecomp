@@ -1,29 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { executeCode, isLanguageSupported } from "@/lib/code-execution";
+import { supabase } from "@/lib/supabase";
 
-// Mock code execution - in production, this would use a sandboxed execution environment
-// like Judge0, Piston, or a custom Docker-based solution
-
-const MOCK_TEST_CASES = [
-  { input: "5", expected: "5", points: 10 },
-  { input: "10", expected: "10", points: 10 },
-  { input: "1", expected: "1", points: 10 },
+// Default test cases if none are found in database
+const DEFAULT_TEST_CASES = [
+  { input: "5", expected: "5", points: 10, isHidden: false },
+  { input: "10", expected: "10", points: 10, isHidden: false },
+  { input: "1", expected: "1", points: 10, isHidden: false },
 ];
-
-async function executeCode(code: string, language: string, input: string) {
-  // In production, this would send the code to a sandboxed execution environment
-  // For now, we'll return mock results
-  
-  // Simulate execution delay
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-
-  // Mock execution - just return the input as output
-  return {
-    output: input,
-    error: null,
-    executionTime: Math.floor(Math.random() * 100),
-    memoryUsed: Math.floor(Math.random() * 1000),
-  };
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,28 +18,72 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Code and language are required" }, { status: 400 });
     }
 
-    // Get test cases for the competition
-    const testCases = MOCK_TEST_CASES;
+    // Validate language is supported
+    if (!isLanguageSupported(language)) {
+      return NextResponse.json({ error: `Unsupported language: ${language}` }, { status: 400 });
+    }
+
+    // Get test cases for the competition from database
+    let testCases = DEFAULT_TEST_CASES;
+    
+    if (competition_id) {
+      const { data: dbTestCases, error } = await supabase
+        .from("test_cases")
+        .select("input, expected_output, points, is_hidden")
+        .eq("competition_id", competition_id)
+        .order("created_at", { ascending: true });
+
+      if (!error && dbTestCases && dbTestCases.length > 0) {
+        testCases = dbTestCases.map((tc) => ({
+          input: tc.input,
+          expected: tc.expected_output,
+          points: tc.points,
+          isHidden: tc.is_hidden,
+        }));
+      }
+    }
+
+    // Filter out hidden test cases if this is just a test run
+    const casesToRun = test_only 
+      ? testCases.filter((tc) => !tc.isHidden) 
+      : testCases;
 
     // Run code against test cases
     const results = await Promise.all(
-      testCases.map(async (testCase) => {
+      casesToRun.map(async (testCase) => {
         try {
           const result = await executeCode(code, language, testCase.input);
           
+          // Check if execution had an error
+          if (result.error) {
+            return {
+              passed: false,
+              input: test_only ? testCase.input : "Hidden",
+              expected: test_only ? testCase.expected : "Hidden",
+              actual: result.output || "",
+              error: result.error,
+              executionTime: result.executionTime,
+              stderr: result.stderr,
+            };
+          }
+          
+          // Compare output with expected
+          const passed = result.output.trim() === testCase.expected.trim();
+          
           return {
-            passed: result.output.trim() === testCase.expected.trim(),
-            input: testCase.input,
-            expected: testCase.expected,
-            actual: result.output,
-            error: result.error,
+            passed,
+            input: test_only ? testCase.input : "Hidden",
+            expected: test_only ? testCase.expected : "Hidden",
+            actual: result.output.trim(),
+            error: null,
             executionTime: result.executionTime,
+            stderr: result.stderr,
           };
         } catch (error) {
           return {
             passed: false,
-            input: testCase.input,
-            expected: testCase.expected,
+            input: test_only ? testCase.input : "Hidden",
+            expected: test_only ? testCase.expected : "Hidden",
             actual: "",
             error: error instanceof Error ? error.message : "Execution error",
           };

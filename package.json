@@ -21,6 +21,7 @@
     "@types/node": "^25.0.10",
     "@types/react": "^19.2.9",
     "@types/react-dom": "^19.2.3",
+    "axios": "^1.13.3",
     "better-auth": "^1.4.17",
     "lucide-react": "^0.563.0",
     "next": "^16.1.4",
