@@ -6,6 +6,20 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { title, description, rules, start_date, end_date, allowed_languages } = body;
 
+    // Validate required fields
+    if (!title || typeof title !== 'string') {
+      return NextResponse.json({ error: "title is required" }, { status: 400 });
+    }
+    if (!start_date || !end_date) {
+      return NextResponse.json({ error: "start_date and end_date are required" }, { status: 400 });
+    }
+    if (new Date(end_date) <= new Date(start_date)) {
+      return NextResponse.json({ error: "end_date must be after start_date" }, { status: 400 });
+    }
+    if (!Array.isArray(allowed_languages) || allowed_languages.length === 0) {
+      return NextResponse.json({ error: "allowed_languages must be a non-empty array" }, { status: 400 });
+    }
+
     // In production, get user ID from session
     const creator_id = "user-123"; // Mock user ID
 
