@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Code2, Trophy, FileText, Clock } from "lucide-react";
+import { useSession } from "@/lib/auth-client";
 
 interface Competition {
   id: string;
@@ -24,44 +25,44 @@ interface Submission {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
+  const { data: session, isPending } = useSession();
   const [userCompetitions, setUserCompetitions] = useState<Competition[]>([]);
   const [userSubmissions, setUserSubmissions] = useState<Submission[]>([]);
 
   useEffect(() => {
-    async function checkAuthAndLoadData() {
-      try {
-        // Check authentication by trying to fetch user's submissions
-        const submissionsResponse = await fetch("/api/submissions");
-        
-        if (submissionsResponse.status === 401) {
-          // Not authenticated, redirect to login
-          router.push("/login");
-          return;
-        }
-
-        if (submissionsResponse.ok) {
-          const submissions = await submissionsResponse.json();
-          setUserSubmissions(submissions);
-        }
-
-        // Fetch competitions (public data)
-        const competitionsResponse = await fetch("/api/competitions");
-        if (competitionsResponse.ok) {
-          const competitions = await competitionsResponse.json();
-          setUserCompetitions(competitions.slice(0, 5)); // Show first 5
-        }
-      } catch (error) {
-        console.error("Error loading dashboard:", error);
-      } finally {
-        setLoading(false);
-      }
+    // Redirect to login if not authenticated
+    if (!isPending && !session) {
+      router.push("/login");
+      return;
     }
 
-    checkAuthAndLoadData();
-  }, [router]);
+    // Load data once authenticated
+    if (session) {
+      async function loadData() {
+        try {
+          // Fetch user's submissions
+          const submissionsResponse = await fetch("/api/submissions");
+          if (submissionsResponse.ok) {
+            const submissions = await submissionsResponse.json();
+            setUserSubmissions(submissions);
+          }
 
-  if (loading) {
+          // Fetch competitions (public data)
+          const competitionsResponse = await fetch("/api/competitions");
+          if (competitionsResponse.ok) {
+            const competitions = await competitionsResponse.json();
+            setUserCompetitions(competitions.slice(0, 5)); // Show first 5
+          }
+        } catch (error) {
+          console.error("Error loading dashboard:", error);
+        }
+      }
+
+      loadData();
+    }
+  }, [session, isPending, router]);
+
+  if (isPending) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -70,6 +71,10 @@ export default function DashboardPage() {
         </div>
       </div>
     );
+  }
+
+  if (!session) {
+    return null; // Will redirect in useEffect
   }
 
   return (

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Code2 } from "lucide-react";
+import { signUp } from "@/lib/auth-client";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -31,15 +32,14 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/auth/sign-up/email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name }),
+      const result = await signUp.email({
+        email,
+        password,
+        name,
       });
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Registration failed");
+      if (result.error) {
+        throw new Error(result.error.message || "Registration failed");
       }
 
       router.push("/dashboard");

@@ -91,10 +91,43 @@ codecomp/
 │   └── layout.tsx        # Root layout
 ├── components/           # Reusable components
 ├── lib/
-│   ├── auth.ts          # BetterAuth configuration
+│   ├── auth.ts          # BetterAuth server configuration
+│   ├── auth-client.ts   # BetterAuth client (for React components)
 │   └── supabase.ts      # Supabase client
 ├── supabase-schema.sql  # Database schema
 └── package.json
+```
+
+## Authentication
+
+The application uses **BetterAuth** for authentication with a proper client/server separation:
+
+### Server-Side (`lib/auth.ts`)
+- BetterAuth instance configuration
+- Database adapter setup
+- OAuth providers (GitHub)
+
+### Client-Side (`lib/auth-client.ts`)
+- React hooks and utilities
+- `useSession()` - Get current session
+- `signIn.email()` - Email/password login
+- `signUp.email()` - User registration
+- `signOut()` - Logout
+
+**Important**: Always use the client functions from `lib/auth-client.ts` in React components, not direct API calls.
+
+Example usage:
+```typescript
+import { useSession, signIn } from "@/lib/auth-client";
+
+// In a component
+const { data: session, isPending } = useSession();
+
+// Login
+await signIn.email({ email, password });
+
+// Register
+await signUp.email({ email, password, name });
 ```
 
 ## Database Schema

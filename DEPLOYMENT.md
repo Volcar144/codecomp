@@ -29,6 +29,9 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 BETTER_AUTH_SECRET=your-random-secret-min-32-chars
 BETTER_AUTH_URL=https://your-domain.com
 
+# Application URL (for auth client)
+NEXT_PUBLIC_APP_URL=https://your-domain.com
+
 # Database URL (PostgreSQL connection string from Supabase)
 DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.your-project.supabase.co:5432/postgres
 
@@ -40,7 +43,7 @@ GITHUB_CLIENT_SECRET=your-github-client-secret
 REDIS_URL=redis://localhost:6379
 
 # Optional: Code Execution API
-CODE_EXECUTION_API_URL=https://your-judge0-instance.com
+CODE_EXECUTION_API_URL=https://your-piston-instance.com/api/v2/piston
 ```
 
 ### Getting Supabase Credentials
@@ -58,6 +61,14 @@ CODE_EXECUTION_API_URL=https://your-judge0-instance.com
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+### Important: Application URL
+
+The `NEXT_PUBLIC_APP_URL` is crucial for BetterAuth client to work correctly. 
+- **Local development**: `http://localhost:3000`
+- **Production**: Your actual domain (e.g., `https://codecomp.vercel.app`)
+
+This URL is used by the auth client (`lib/auth-client.ts`) to make API calls to the authentication endpoints.
 
 ## Step 3: Deploy to Vercel
 

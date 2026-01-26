@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Code2 } from "lucide-react";
+import { signIn } from "@/lib/auth-client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,14 +19,13 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/auth/sign-in/email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+      const result = await signIn.email({
+        email,
+        password,
       });
 
-      if (!response.ok) {
-        throw new Error("Invalid credentials");
+      if (result.error) {
+        throw new Error(result.error.message || "Invalid credentials");
       }
 
       router.push("/dashboard");
