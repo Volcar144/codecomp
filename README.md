@@ -121,26 +121,45 @@ To integrate a real execution engine, modify `/app/api/execute/route.ts`.
 
 ## Features Implementation Status
 
-- ✅ User Authentication (BetterAuth)
+- ✅ User Authentication (BetterAuth with email/password)
 - ✅ Competition Creation & Management
-- ✅ Code Editor (Monaco)
-- ✅ Multi-language Support
-- ✅ Test Case Management
+- ✅ Code Editor (Monaco - VS Code's editor)
+- ✅ Multi-language Support (Python, JavaScript, Java, C++, C#, Go, Rust)
+- ✅ Test Case Management (via database)
 - ✅ Submission System
-- ✅ Basic Leaderboard
-- ✅ Prize Management
-- ✅ Judge Assignment
+- ✅ Leaderboard with Podium Display
+- ✅ Prize Management (database schema)
+- ✅ Judge Assignment (database schema)
+- ✅ User Dashboard
+- ✅ Documentation Page
 - ⚠️ Code Execution (Mock - needs production implementation)
-- 🔄 Redis/Cron Integration (Optional)
+- 🔄 Redis/Cron Integration (Optional - for caching and scheduled tasks)
+
+## Screenshots
+
+### Homepage
+Beautiful landing page with feature highlights and call-to-action buttons.
+
+### Code Editor
+Monaco editor with syntax highlighting, multi-language support, and test execution.
+
+### Leaderboard
+Interactive leaderboard with podium display for top 3 and detailed rankings table.
+
+### Competition Management
+Easy-to-use forms for creating competitions with custom rules and settings.
 
 ## Deployment
 
-### Vercel (Recommended)
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
 
-1. Push your code to GitHub
-2. Import the project in Vercel
-3. Add environment variables
-4. Deploy
+### Quick Deploy to Vercel
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Volcar144/codecomp)
+
+1. Click the button above
+2. Set environment variables (see DEPLOYMENT.md)
+3. Deploy!
 
 ### Other Platforms
 
@@ -149,15 +168,37 @@ The app can be deployed to any platform that supports Next.js:
 - Netlify
 - Railway
 - Render
+- Docker
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## Support
+
+For issues and questions, please open a GitHub issue.
+
+## Roadmap
+
+- [ ] Real-time code execution with Judge0/Piston
+- [ ] WebSocket support for live competitions
+- [ ] Team competitions
+- [ ] Code review features for judges
+- [ ] Discussion forums per competition
+- [ ] Email notifications
+- [ ] Advanced analytics and insights
+- [ ] Mobile apps (React Native)
+- [ ] AI-powered code suggestions
+- [ ] Contest templates library
 
 ## License
 
 ISC
 
-## Support
+## Acknowledgments
 
-For issues and questions, please open a GitHub issue.
+- Built with [Next.js](https://nextjs.org/)
+- Authentication by [BetterAuth](https://www.better-auth.com/)
+- Database by [Supabase](https://supabase.com/)
+- Code editor by [Monaco Editor](https://microsoft.github.io/monaco-editor/)
+- Icons by [Lucide](https://lucide.dev/)
