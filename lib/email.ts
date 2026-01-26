@@ -1,10 +1,24 @@
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 
-// Initialize Resend client
-// If RESEND_API_KEY is not set, this will be null and emails won't be sent
-const resend = process.env.RESEND_API_KEY 
-  ? new Resend(process.env.RESEND_API_KEY)
-  : null;
+// Create nodemailer transporter
+// If SMTP configuration is not set, this will be null and emails won't be sent
+const createTransporter = () => {
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
+    return null;
+  }
+
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || '587'),
+    secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASSWORD,
+    },
+  });
+};
+
+const transporter = createTransporter();
 
 /**
  * Send password reset email
@@ -18,16 +32,16 @@ export async function sendPasswordResetEmail(
 ): Promise<void> {
   const fromEmail = process.env.EMAIL_FROM || 'noreply@codecomp.com';
   
-  // If Resend is not configured, log to console (development mode)
-  if (!resend) {
+  // If SMTP is not configured, log to console (development mode)
+  if (!transporter) {
     console.log(`[DEV] Password reset requested for ${email}`);
     console.log(`[DEV] Reset URL: ${resetUrl}`);
-    console.log('[DEV] Note: Configure RESEND_API_KEY environment variable to send actual emails');
+    console.log('[DEV] Note: Configure SMTP environment variables to send actual emails');
     return;
   }
 
   try {
-    await resend.emails.send({
+    await transporter.sendMail({
       from: fromEmail,
       to: email,
       subject: 'Reset Your CodeComp Password',

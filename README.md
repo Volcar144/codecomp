@@ -58,12 +58,16 @@ BETTER_AUTH_URL=http://localhost:3000
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 DATABASE_URL=postgresql://user:password@host:port/database
 
-# Optional: Email service (for password reset)
-RESEND_API_KEY=re_your_api_key
+# Optional: Email service (for password reset) - SMTP configuration
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
 EMAIL_FROM=noreply@yourdomain.com
 ```
 
-**Note**: Without `RESEND_API_KEY`, password reset links will be logged to console instead of being emailed.
+**Note**: Without SMTP configuration, password reset links will be logged to console instead of being emailed.
 
 4. Set up the database:
 

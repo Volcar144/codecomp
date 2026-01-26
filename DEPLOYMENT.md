@@ -36,8 +36,12 @@ NEXT_PUBLIC_APP_URL=https://your-domain.com
 DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.your-project.supabase.co:5432/postgres
 
 # Email Configuration (for password reset)
-# Get your API key from https://resend.com/api-keys
-RESEND_API_KEY=re_your_api_key_here
+# SMTP settings for nodemailer
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
 EMAIL_FROM=noreply@yourdomain.com
 
 # Optional: GitHub OAuth (for social login)
@@ -67,23 +71,44 @@ CODE_EXECUTION_API_URL=https://your-piston-instance.com/api/v2/piston
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-### Configuring Email Service (Resend)
+### Configuring Email Service (SMTP with nodemailer)
 
-The platform uses [Resend](https://resend.com) for sending password reset emails.
+The platform uses [nodemailer](https://nodemailer.com) for sending password reset emails via SMTP.
 
-1. Sign up at [resend.com](https://resend.com)
-2. Verify your domain (or use their test domain for development)
-3. Generate an API key from the [API Keys](https://resend.com/api-keys) page
-4. Add to environment variables:
-   - `RESEND_API_KEY`: Your Resend API key (e.g., `re_123abc...`)
-   - `EMAIL_FROM`: Your sender email address (e.g., `noreply@yourdomain.com`)
+**Configuration Options:**
 
-**Note**: If `RESEND_API_KEY` is not set, the app will fall back to console logging (development mode) - password reset URLs will be logged to the server console instead of being emailed.
+1. **Gmail** (recommended for development):
+   - Enable 2-factor authentication on your Gmail account
+   - Generate an App Password: https://myaccount.google.com/apppasswords
+   - Set environment variables:
+     ```
+     SMTP_HOST=smtp.gmail.com
+     SMTP_PORT=587
+     SMTP_SECURE=false
+     SMTP_USER=your-email@gmail.com
+     SMTP_PASSWORD=your-app-password
+     EMAIL_FROM=your-email@gmail.com
+     ```
+
+2. **Other SMTP Providers** (SendGrid, Mailgun, AWS SES, etc.):
+   - Get SMTP credentials from your provider
+   - Update environment variables accordingly:
+     ```
+     SMTP_HOST=smtp.your-provider.com
+     SMTP_PORT=587 (or 465 for secure)
+     SMTP_SECURE=false (true for port 465)
+     SMTP_USER=your-smtp-username
+     SMTP_PASSWORD=your-smtp-password
+     EMAIL_FROM=noreply@yourdomain.com
+     ```
+
+**Note**: If SMTP environment variables are not set, the app will fall back to console logging (development mode) - password reset URLs will be logged to the server console instead of being emailed.
 
 **For production**: 
-- Always set `RESEND_API_KEY` to enable email sending
-- Use a verified domain in `EMAIL_FROM` for better deliverability
-- Monitor your Resend dashboard for email delivery metrics
+- Always configure SMTP settings to enable email sending
+- Use a dedicated email service (SendGrid, Mailgun, AWS SES) for better deliverability
+- Monitor email delivery and bounce rates
+- Consider using a custom domain for `EMAIL_FROM` to improve reputation
 
 ### Important: Application URL
 
@@ -112,7 +137,11 @@ vercel env add BETTER_AUTH_SECRET
 vercel env add BETTER_AUTH_URL
 vercel env add NEXT_PUBLIC_APP_URL
 vercel env add DATABASE_URL
-vercel env add RESEND_API_KEY
+vercel env add SMTP_HOST
+vercel env add SMTP_PORT
+vercel env add SMTP_SECURE
+vercel env add SMTP_USER
+vercel env add SMTP_PASSWORD
 vercel env add EMAIL_FROM
 
 # Deploy to production

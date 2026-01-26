@@ -12,8 +12,8 @@ export const auth = betterAuth({
     enabled: true,
     // Password reset configuration
     sendResetPassword: async ({ user, url }, request) => {
-      // Send password reset email using Resend
-      // Falls back to console logging if RESEND_API_KEY is not configured
+      // Send password reset email using nodemailer
+      // Falls back to console logging if SMTP is not configured
       await sendPasswordResetEmail(user.email, url);
     },
     resetPasswordTokenExpiresIn: 3600, // 1 hour
