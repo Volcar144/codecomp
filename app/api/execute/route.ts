@@ -3,6 +3,8 @@ import { executeCode, isLanguageSupported } from "@/lib/code-execution";
 import { supabase } from "@/lib/supabase";
 
 // Default test cases if none are found in database
+// These are simple echo-style tests for basic validation
+// Competition creators should define their own meaningful test cases
 const DEFAULT_TEST_CASES = [
   { input: "5", expected: "5", points: 10, isHidden: false },
   { input: "10", expected: "10", points: 10, isHidden: false },

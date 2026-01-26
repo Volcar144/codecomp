@@ -3,6 +3,11 @@ import axios from "axios";
 // Piston API endpoint - public instance
 const PISTON_API = process.env.CODE_EXECUTION_API_URL || "https://emkc.org/api/v2/piston";
 
+// Execution timeout limits (in milliseconds)
+const COMPILE_TIMEOUT_MS = 10000; // 10 seconds
+const RUN_TIMEOUT_MS = 5000;      // 5 seconds
+const REQUEST_TIMEOUT_MS = 15000; // 15 seconds total
+
 // Language version mappings for Piston
 const LANGUAGE_MAP: Record<string, { language: string; version: string }> = {
   python: { language: "python", version: "3.10.0" },
@@ -18,7 +23,7 @@ export interface ExecutionResult {
   output: string;
   error: string | null;
   executionTime: number;
-  memoryUsed: number;
+  memoryUsed: number; // Note: Currently always 0 as Piston API doesn't provide memory usage
   stderr?: string;
   stdout?: string;
 }
@@ -54,8 +59,8 @@ export async function executeCode(
         ],
         stdin: input,
         args: [],
-        compile_timeout: 10000, // 10 seconds
-        run_timeout: 5000, // 5 seconds
+        compile_timeout: COMPILE_TIMEOUT_MS,
+        run_timeout: RUN_TIMEOUT_MS,
         compile_memory_limit: -1,
         run_memory_limit: -1,
       },
@@ -63,7 +68,7 @@ export async function executeCode(
         headers: {
           "Content-Type": "application/json",
         },
-        timeout: 15000, // 15 second timeout for the entire request
+        timeout: REQUEST_TIMEOUT_MS,
       }
     );
 
