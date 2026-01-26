@@ -1,0 +1,111 @@
+import { Resend } from 'resend';
+
+// Initialize Resend client
+// If RESEND_API_KEY is not set, this will be null and emails won't be sent
+const resend = process.env.RESEND_API_KEY 
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
+
+/**
+ * Send password reset email
+ * @param email User's email address
+ * @param resetUrl Password reset URL with token
+ * @returns Promise that resolves when email is sent
+ */
+export async function sendPasswordResetEmail(
+  email: string,
+  resetUrl: string
+): Promise<void> {
+  const fromEmail = process.env.EMAIL_FROM || 'noreply@codecomp.com';
+  
+  // If Resend is not configured, log to console (development mode)
+  if (!resend) {
+    console.log(`[DEV] Password reset requested for ${email}`);
+    console.log(`[DEV] Reset URL: ${resetUrl}`);
+    console.log('[DEV] Note: Configure RESEND_API_KEY environment variable to send actual emails');
+    return;
+  }
+
+  try {
+    await resend.emails.send({
+      from: fromEmail,
+      to: email,
+      subject: 'Reset Your CodeComp Password',
+      html: `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Reset Your Password</title>
+          </head>
+          <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+                <h1 style="color: #ffffff; margin: 0; font-size: 28px;">CodeComp</h1>
+                <p style="color: #e0e7ff; margin: 10px 0 0 0; font-size: 14px;">Coding Competition Platform</p>
+              </div>
+              
+              <div style="background: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
+                <h2 style="color: #111827; margin: 0 0 20px 0; font-size: 24px;">Reset Your Password</h2>
+                
+                <p style="color: #4b5563; margin: 0 0 20px 0; line-height: 1.6; font-size: 16px;">
+                  We received a request to reset your password for your CodeComp account. Click the button below to create a new password:
+                </p>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                  <a href="${resetUrl}" 
+                     style="display: inline-block; background: #667eea; color: #ffffff; text-decoration: none; padding: 14px 40px; border-radius: 8px; font-weight: 600; font-size: 16px;">
+                    Reset Password
+                  </a>
+                </div>
+                
+                <p style="color: #6b7280; margin: 20px 0 10px 0; line-height: 1.6; font-size: 14px;">
+                  Or copy and paste this URL into your browser:
+                </p>
+                <p style="color: #667eea; margin: 0; word-break: break-all; font-size: 14px;">
+                  ${resetUrl}
+                </p>
+                
+                <div style="margin-top: 30px; padding-top: 30px; border-top: 1px solid #e5e7eb;">
+                  <p style="color: #9ca3af; margin: 0; font-size: 13px; line-height: 1.6;">
+                    This link will expire in 1 hour for security reasons.
+                  </p>
+                  <p style="color: #9ca3af; margin: 10px 0 0 0; font-size: 13px; line-height: 1.6;">
+                    If you didn't request a password reset, you can safely ignore this email.
+                  </p>
+                </div>
+              </div>
+              
+              <div style="text-align: center; margin-top: 30px;">
+                <p style="color: #9ca3af; margin: 0; font-size: 12px;">
+                  © ${new Date().getFullYear()} CodeComp. All rights reserved.
+                </p>
+              </div>
+            </div>
+          </body>
+        </html>
+      `,
+      text: `
+Reset Your CodeComp Password
+
+We received a request to reset your password for your CodeComp account.
+
+Click the link below to create a new password:
+${resetUrl}
+
+This link will expire in 1 hour for security reasons.
+
+If you didn't request a password reset, you can safely ignore this email.
+
+© ${new Date().getFullYear()} CodeComp. All rights reserved.
+      `.trim(),
+    });
+
+    console.log(`✅ Password reset email sent to ${email}`);
+  } catch (error) {
+    console.error('Failed to send password reset email:', error);
+    // Don't throw - we don't want to expose email sending errors to users
+    // for security reasons (prevent email enumeration)
+  }
+}

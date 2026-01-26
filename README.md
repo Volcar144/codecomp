@@ -55,8 +55,15 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 BETTER_AUTH_SECRET=your-secret-key
 BETTER_AUTH_URL=http://localhost:3000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 DATABASE_URL=postgresql://user:password@host:port/database
+
+# Optional: Email service (for password reset)
+RESEND_API_KEY=re_your_api_key
+EMAIL_FROM=noreply@yourdomain.com
 ```
+
+**Note**: Without `RESEND_API_KEY`, password reset links will be logged to console instead of being emailed.
 
 4. Set up the database:
 

@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { sendPasswordResetEmail } from "./email";
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/codecomp';
 
@@ -10,21 +11,10 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     // Password reset configuration
-    // In production, implement sendResetPassword to send actual emails
-    // For now, log the reset URL (replace with actual email service)
-    sendResetPassword: async ({ user, url, token }, request) => {
-      // TODO: Replace with your email service (e.g., Resend, SendGrid, etc.)
-      // Example with a hypothetical email service:
-      // await sendEmail({
-      //   to: user.email,
-      //   subject: "Reset your password",
-      //   text: `Click the link to reset your password: ${url}`,
-      // });
-      
-      // For development, log the reset URL
-      console.log(`[DEV] Password reset requested for ${user.email}`);
-      console.log(`[DEV] Reset URL: ${url}`);
-      console.log(`[DEV] Token: ${token}`);
+    sendResetPassword: async ({ user, url }, request) => {
+      // Send password reset email using Resend
+      // Falls back to console logging if RESEND_API_KEY is not configured
+      await sendPasswordResetEmail(user.email, url);
     },
     resetPasswordTokenExpiresIn: 3600, // 1 hour
   },

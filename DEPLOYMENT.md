@@ -35,6 +35,11 @@ NEXT_PUBLIC_APP_URL=https://your-domain.com
 # Database URL (PostgreSQL connection string from Supabase)
 DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.your-project.supabase.co:5432/postgres
 
+# Email Configuration (for password reset)
+# Get your API key from https://resend.com/api-keys
+RESEND_API_KEY=re_your_api_key_here
+EMAIL_FROM=noreply@yourdomain.com
+
 # Optional: GitHub OAuth (for social login)
 GITHUB_CLIENT_ID=your-github-client-id
 GITHUB_CLIENT_SECRET=your-github-client-secret
@@ -61,6 +66,24 @@ CODE_EXECUTION_API_URL=https://your-piston-instance.com/api/v2/piston
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+### Configuring Email Service (Resend)
+
+The platform uses [Resend](https://resend.com) for sending password reset emails.
+
+1. Sign up at [resend.com](https://resend.com)
+2. Verify your domain (or use their test domain for development)
+3. Generate an API key from the [API Keys](https://resend.com/api-keys) page
+4. Add to environment variables:
+   - `RESEND_API_KEY`: Your Resend API key (e.g., `re_123abc...`)
+   - `EMAIL_FROM`: Your sender email address (e.g., `noreply@yourdomain.com`)
+
+**Note**: If `RESEND_API_KEY` is not set, the app will fall back to console logging (development mode) - password reset URLs will be logged to the server console instead of being emailed.
+
+**For production**: 
+- Always set `RESEND_API_KEY` to enable email sending
+- Use a verified domain in `EMAIL_FROM` for better deliverability
+- Monitor your Resend dashboard for email delivery metrics
 
 ### Important: Application URL
 
