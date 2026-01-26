@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { sendPasswordResetEmail } from "./email";
 
 const databaseUrl = process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/codecomp';
 
@@ -9,6 +10,13 @@ export const auth = betterAuth({
   },
   emailAndPassword: {
     enabled: true,
+    // Password reset configuration
+    sendResetPassword: async ({ user, url }, request) => {
+      // Send password reset email using nodemailer
+      // Falls back to console logging if SMTP is not configured
+      await sendPasswordResetEmail(user.email, url);
+    },
+    resetPasswordTokenExpiresIn: 3600, // 1 hour
   },
   socialProviders: {
     github: {

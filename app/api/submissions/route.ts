@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
 
 export async function POST(request: NextRequest) {
   try {
+    // Get authenticated session
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized. Please sign in to submit." }, { status: 401 });
+    }
+
     const body = await request.json();
     const { code, language, competition_id } = body;
 
@@ -13,8 +24,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // In production, get user ID from session
-    const user_id = "user-123"; // Mock user ID
+    // Verify competition exists and is active
+    const { data: competition, error: compError } = await supabase
+      .from("competitions")
+      .select("id, status, start_date, end_date, allowed_languages")
+      .eq("id", competition_id)
+      .single();
+
+    if (compError || !competition) {
+      return NextResponse.json({ error: "Competition not found" }, { status: 404 });
+    }
+
+    const now = new Date();
+    const startDate = new Date(competition.start_date);
+    const endDate = new Date(competition.end_date);
+
+    if (now < startDate) {
+      return NextResponse.json({ error: "Competition has not started yet" }, { status: 400 });
+    }
+
+    if (now > endDate) {
+      return NextResponse.json({ error: "Competition has ended" }, { status: 400 });
+    }
+
+    if (!competition.allowed_languages.includes(language)) {
+      return NextResponse.json({ error: `Language '${language}' is not allowed for this competition` }, { status: 400 });
+    }
 
     // Execute code to get score
     const executeResponse = await fetch(`${request.nextUrl.origin}/api/execute`, {
@@ -32,7 +67,7 @@ export async function POST(request: NextRequest) {
       .from("submissions")
       .insert({
         competition_id,
-        user_id,
+        user_id: session.user.id,
         code,
         language,
         status,
@@ -58,6 +93,11 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
+    // Get authenticated session
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+
     const url = new URL(request.url);
     const competition_id = url.searchParams.get("competition_id");
     const user_id = url.searchParams.get("user_id");
@@ -68,8 +108,17 @@ export async function GET(request: NextRequest) {
       query = query.eq("competition_id", competition_id);
     }
 
-    if (user_id) {
-      query = query.eq("user_id", user_id);
+    // If user requests their own submissions, or if no user_id filter, only show own submissions
+    if (session?.user?.id) {
+      if (!user_id || user_id === session.user.id) {
+        query = query.eq("user_id", session.user.id);
+      } else {
+        // Non-admin users can only see their own submissions
+        return NextResponse.json({ error: "Unauthorized to view other users' submissions" }, { status: 403 });
+      }
+    } else {
+      // No session - require authentication
+      return NextResponse.json({ error: "Unauthorized. Please sign in." }, { status: 401 });
     }
 
     const { data, error } = await query.order("submitted_at", { ascending: false });
