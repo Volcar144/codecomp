@@ -110,7 +110,10 @@ vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY
 vercel env add SUPABASE_SERVICE_ROLE_KEY
 vercel env add BETTER_AUTH_SECRET
 vercel env add BETTER_AUTH_URL
+vercel env add NEXT_PUBLIC_APP_URL
 vercel env add DATABASE_URL
+vercel env add RESEND_API_KEY
+vercel env add EMAIL_FROM
 
 # Deploy to production
 vercel --prod
