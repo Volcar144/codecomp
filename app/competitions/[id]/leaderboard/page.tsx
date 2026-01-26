@@ -1,87 +1,68 @@
 import Link from "next/link";
 import { Code2, Trophy, Medal } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { notFound } from "next/navigation";
 
-// Mock leaderboard data - in production this would come from Supabase
-const leaderboardData = [
-  {
-    rank: 1,
-    user_id: "user-1",
-    username: "CodeMaster",
-    best_score: 100,
-    best_time: 523,
-    total_submissions: 8,
-    last_submission: "2024-02-15T14:30:00Z",
-  },
-  {
-    rank: 2,
-    user_id: "user-2",
-    username: "AlgoExpert",
-    best_score: 95,
-    best_time: 678,
-    total_submissions: 12,
-    last_submission: "2024-02-15T12:15:00Z",
-  },
-  {
-    rank: 3,
-    user_id: "user-3",
-    username: "DevNinja",
-    best_score: 90,
-    best_time: 845,
-    total_submissions: 5,
-    last_submission: "2024-02-15T10:45:00Z",
-  },
-  {
-    rank: 4,
-    user_id: "user-4",
-    username: "CodeWarrior",
-    best_score: 85,
-    best_time: 920,
-    total_submissions: 15,
-    last_submission: "2024-02-15T09:30:00Z",
-  },
-  {
-    rank: 5,
-    user_id: "user-5",
-    username: "ByteHunter",
-    best_score: 80,
-    best_time: 1050,
-    total_submissions: 6,
-    last_submission: "2024-02-14T18:20:00Z",
-  },
-];
+async function getLeaderboard(competitionId: string) {
+  // Get competition details
+  const { data: competition, error: compError } = await supabase
+    .from("competitions")
+    .select("id, title")
+    .eq("id", competitionId)
+    .single();
 
-const competition = {
-  id: "1",
-  title: "Algorithm Challenge 2024",
-};
+  if (compError || !competition) {
+    return null;
+  }
 
-function getRankBadge(rank: number) {
-  if (rank === 1)
-    return (
-      <div className="flex items-center justify-center w-10 h-10 bg-yellow-100 dark:bg-yellow-900 rounded-full">
-        <Trophy className="h-6 w-6 text-yellow-600 dark:text-yellow-400" />
-      </div>
-    );
-  if (rank === 2)
-    return (
-      <div className="flex items-center justify-center w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-full">
-        <Medal className="h-6 w-6 text-gray-600 dark:text-gray-400" />
-      </div>
-    );
-  if (rank === 3)
-    return (
-      <div className="flex items-center justify-center w-10 h-10 bg-orange-100 dark:bg-orange-900 rounded-full">
-        <Medal className="h-6 w-6 text-orange-600 dark:text-orange-400" />
-      </div>
-    );
-  return (
-    <div className="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-gray-800 rounded-full">
-      <span className="text-lg font-bold">{rank}</span>
-    </div>
-  );
+  // Get leaderboard data from the view
+  const { data: leaderboardData, error: leaderboardError } = await supabase
+    .from("leaderboard")
+    .select("*")
+    .eq("competition_id", competitionId)
+    .order("rank", { ascending: true });
+
+  return {
+    competition,
+    leaderboardData: leaderboardData || [],
+  };
 }
 
-export default function LeaderboardPage({ params }: { params: { id: string } }) {
+export default async function LeaderboardPage({ params }: { params: { id: string } }) {
+  const data = await getLeaderboard(params.id);
+
+  if (!data) {
+    notFound();
+  }
+
+  const { competition, leaderboardData } = data;
+
+  function getRankBadge(rank: number) {
+    if (rank === 1)
+      return (
+        <div className="flex items-center justify-center w-10 h-10 bg-yellow-100 dark:bg-yellow-900 rounded-full">
+          <Trophy className="h-6 w-6 text-yellow-600 dark:text-yellow-400" />
+        </div>
+      );
+    if (rank === 2)
+      return (
+        <div className="flex items-center justify-center w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-full">
+          <Medal className="h-6 w-6 text-gray-600 dark:text-gray-400" />
+        </div>
+      );
+    if (rank === 3)
+      return (
+        <div className="flex items-center justify-center w-10 h-10 bg-orange-100 dark:bg-orange-900 rounded-full">
+          <Medal className="h-6 w-6 text-orange-600 dark:text-orange-400" />
+        </div>
+      );
+    return (
+      <div className="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-gray-800 rounded-full">
+        <span className="text-lg font-bold">{rank}</span>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
       <header className="border-b bg-white dark:bg-gray-900">

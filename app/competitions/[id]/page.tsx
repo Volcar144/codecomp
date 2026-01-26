@@ -1,25 +1,39 @@
 import Link from "next/link";
 import { Code2, Calendar, Trophy, Users, FileText } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { notFound } from "next/navigation";
 
-// Mock data - in production this would come from Supabase
-const competition = {
-  id: "1",
-  title: "Algorithm Challenge 2024",
-  description: "Test your algorithmic skills in this competition featuring dynamic programming, graph theory, and more.",
-  rules: "1. No plagiarism allowed\n2. You can submit multiple times\n3. Your best submission will be counted\n4. Time limit: 2 seconds per test case",
-  start_date: "2024-02-01T00:00:00Z",
-  end_date: "2024-02-28T23:59:59Z",
-  allowed_languages: ["python", "javascript", "java", "cpp"],
-  participants: 245,
-  status: "active",
-  prizes: [
-    { rank: 1, title: "First Place", value: "$1000" },
-    { rank: 2, title: "Second Place", value: "$500" },
-    { rank: 3, title: "Third Place", value: "$250" },
-  ],
-};
+async function getCompetition(id: string) {
+  const { data, error } = await supabase
+    .from("competitions")
+    .select("*")
+    .eq("id", id)
+    .single();
 
-export default function CompetitionDetailPage({ params }: { params: { id: string } }) {
+  if (error || !data) {
+    return null;
+  }
+
+  // Get prizes for this competition
+  const { data: prizes } = await supabase
+    .from("prizes")
+    .select("*")
+    .eq("competition_id", id)
+    .order("rank", { ascending: true });
+
+  return {
+    ...data,
+    prizes: prizes || [],
+  };
+}
+
+export default async function CompetitionDetailPage({ params }: { params: { id: string } }) {
+  const competition = await getCompetition(params.id);
+
+  if (!competition) {
+    notFound();
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
       <header className="border-b bg-white dark:bg-gray-900">
@@ -89,7 +103,7 @@ export default function CompetitionDetailPage({ params }: { params: { id: string
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
               <h2 className="text-2xl font-bold mb-4">Allowed Languages</h2>
               <div className="flex flex-wrap gap-2">
-                {competition.allowed_languages.map((lang) => (
+                {competition.allowed_languages.map((lang: string) => (
                   <span
                     key={lang}
                     className="px-3 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-full text-sm font-semibold"
@@ -115,7 +129,7 @@ export default function CompetitionDetailPage({ params }: { params: { id: string
                 Prizes
               </h2>
               <div className="space-y-3">
-                {competition.prizes.map((prize) => (
+                {competition.prizes.map((prize: any) => (
                   <div key={prize.rank} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <div>
                       <div className="font-semibold">{prize.title}</div>

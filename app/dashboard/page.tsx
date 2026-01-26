@@ -1,30 +1,77 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Code2, Trophy, FileText, Clock } from "lucide-react";
 
-// Mock data - in production this would come from Supabase
-const userCompetitions = [
-  {
-    id: "1",
-    title: "Algorithm Challenge 2024",
-    role: "participant",
-    submissions: 3,
-    bestScore: 85,
-    rank: 12,
-  },
-];
+interface Competition {
+  id: string;
+  title: string;
+  submissions?: number;
+  bestScore?: number;
+  rank?: number;
+}
 
-const userSubmissions = [
-  {
-    id: "1",
-    competition: "Algorithm Challenge 2024",
-    language: "Python",
-    score: 85,
-    status: "passed",
-    submitted_at: "2024-02-15T10:30:00Z",
-  },
-];
+interface Submission {
+  id: string;
+  competition_id: string;
+  language: string;
+  score: number;
+  status: string;
+  submitted_at: string;
+}
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [userCompetitions, setUserCompetitions] = useState<Competition[]>([]);
+  const [userSubmissions, setUserSubmissions] = useState<Submission[]>([]);
+
+  useEffect(() => {
+    async function checkAuthAndLoadData() {
+      try {
+        // Check authentication by trying to fetch user's submissions
+        const submissionsResponse = await fetch("/api/submissions");
+        
+        if (submissionsResponse.status === 401) {
+          // Not authenticated, redirect to login
+          router.push("/login");
+          return;
+        }
+
+        if (submissionsResponse.ok) {
+          const submissions = await submissionsResponse.json();
+          setUserSubmissions(submissions);
+        }
+
+        // Fetch competitions (public data)
+        const competitionsResponse = await fetch("/api/competitions");
+        if (competitionsResponse.ok) {
+          const competitions = await competitionsResponse.json();
+          setUserCompetitions(competitions.slice(0, 5)); // Show first 5
+        }
+      } catch (error) {
+        console.error("Error loading dashboard:", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    checkAuthAndLoadData();
+  }, [router]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600 dark:text-gray-400">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
       <header className="border-b bg-white dark:bg-gray-900">
@@ -140,7 +187,7 @@ export default function DashboardPage() {
                   className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
                 >
                   <div className="flex items-start justify-between mb-2">
-                    <h3 className="font-semibold">{sub.competition}</h3>
+                    <h3 className="font-semibold">Competition {sub.competition_id.substring(0, 8)}</h3>
                     <span
                       className={`px-2 py-1 rounded text-xs font-semibold ${
                         sub.status === "passed"
