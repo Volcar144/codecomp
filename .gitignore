@@ -1,8 +1,12 @@
 node_modules
-.next
+.next/
 .env*.local
 *.log
-dist
-build
+dist/
+build/
 .DS_Store
 test-execution.mjs
+.vscode/
+.idea/
+.swc/
+coverage/
