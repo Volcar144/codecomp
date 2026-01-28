@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Code2, Trophy, FileText, Clock } from "lucide-react";
+import { Code2, Trophy, FileText, Clock, User } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 
 interface Competition {
@@ -85,12 +85,19 @@ export default function DashboardPage() {
             <Code2 className="h-8 w-8 text-blue-600" />
             <span className="text-2xl font-bold">CodeComp</span>
           </Link>
-          <div className="flex gap-4">
+          <div className="flex gap-4 items-center">
             <Link
               href="/competitions"
               className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
             >
               Competitions
+            </Link>
+            <Link
+              href="/profile"
+              className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex items-center gap-1"
+            >
+              <User className="h-4 w-4" />
+              Profile
             </Link>
             <Link
               href="/competitions/create"

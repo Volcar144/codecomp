@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Code2, Play, Send, CheckCircle, XCircle } from "lucide-react";
+import { Code2, Play, Send, CheckCircle, XCircle, Lock } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import posthog from "posthog-js";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -25,11 +26,22 @@ type TestResult = {
 
 export default function SubmitPage({ params }: { params: { id: string } }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [language, setLanguage] = useState("python");
   const [code, setCode] = useState(LANGUAGE_CONFIGS.python.defaultCode);
   const [running, setRunning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [testResults, setTestResults] = useState<TestResult[]>([]);
+  const [inviteCode, setInviteCode] = useState<string>("");
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Get invite code from URL if present
+  useEffect(() => {
+    const codeFromUrl = searchParams.get("invite");
+    if (codeFromUrl) {
+      setInviteCode(codeFromUrl);
+    }
+  }, [searchParams]);
 
   const handleLanguageChange = (newLang: string) => {
     setLanguage(newLang);
@@ -55,8 +67,18 @@ export default function SubmitPage({ params }: { params: { id: string } }) {
 
       const data = await response.json();
       setTestResults(data.results || []);
+
+      // Capture code execution event
+      posthog.capture("code_executed", {
+        competition_id: params.id,
+        language: language,
+        passed_tests: data.passedTests || 0,
+        total_tests: data.totalTests || 0,
+        score: data.score || 0,
+      });
     } catch (error) {
       console.error("Error running code:", error);
+      posthog.captureException(error);
     } finally {
       setRunning(false);
     }
@@ -64,6 +86,7 @@ export default function SubmitPage({ params }: { params: { id: string } }) {
 
   const handleSubmit = async () => {
     setSubmitting(true);
+    setSubmitError(null);
 
     try {
       const response = await fetch("/api/submissions", {
@@ -73,14 +96,20 @@ export default function SubmitPage({ params }: { params: { id: string } }) {
           code,
           language,
           competition_id: params.id,
+          invite_code: inviteCode || undefined,
         }),
       });
 
+      const data = await response.json();
+
       if (response.ok) {
         router.push(`/competitions/${params.id}`);
+      } else {
+        setSubmitError(data.error || "Failed to submit code");
       }
     } catch (error) {
       console.error("Error submitting code:", error);
+      setSubmitError("An error occurred while submitting");
     } finally {
       setSubmitting(false);
     }
@@ -225,6 +254,39 @@ export default function SubmitPage({ params }: { params: { id: string } }) {
                 <li>• Make sure to handle edge cases</li>
               </ul>
             </div>
+
+            {/* Submit Error */}
+            {submitError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
+                <div className="flex items-start gap-2">
+                  <XCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-red-700 dark:text-red-300 font-medium">Submission Error</p>
+                    <p className="text-red-600 dark:text-red-400 text-sm">{submitError}</p>
+                  </div>
+                </div>
+                
+                {/* Show invite code input if error suggests private competition */}
+                {submitError.includes("private") && (
+                  <div className="mt-4">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      <Lock className="inline h-4 w-4 mr-1" />
+                      Enter Invite Code
+                    </label>
+                    <input
+                      type="text"
+                      value={inviteCode}
+                      onChange={(e) => setInviteCode(e.target.value)}
+                      placeholder="Enter invite code"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      This competition is private. You need an invite code to submit.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </main>

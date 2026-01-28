@@ -2,6 +2,9 @@ import Link from "next/link";
 import { Code2, Calendar, Trophy, Users, FileText } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { notFound } from "next/navigation";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
+import { CompetitionManagement } from "@/components/CompetitionManagement";
 
 async function getCompetition(id: string) {
   const { data, error } = await supabase
@@ -21,14 +24,34 @@ async function getCompetition(id: string) {
     .eq("competition_id", id)
     .order("rank", { ascending: true });
 
+  // Get test case count
+  const { count: testCaseCount } = await supabase
+    .from("test_cases")
+    .select("*", { count: "exact", head: true })
+    .eq("competition_id", id);
+
   return {
     ...data,
     prizes: prizes || [],
+    testCaseCount: testCaseCount || 0,
   };
+}
+
+async function getCurrentUser() {
+  try {
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+    return session?.user?.id || null;
+  } catch {
+    return null;
+  }
 }
 
 export default async function CompetitionDetailPage({ params }: { params: { id: string } }) {
   const competition = await getCompetition(params.id);
+  const currentUserId = await getCurrentUser();
+  const isCreator = currentUserId === competition?.creator_id;
 
   if (!competition) {
     notFound();
@@ -120,6 +143,16 @@ export default async function CompetitionDetailPage({ params }: { params: { id: 
             >
               Start Coding →
             </Link>
+
+            {/* Creator Management Section */}
+            {isCreator && (
+              <CompetitionManagement
+                competitionId={params.id}
+                isPublic={competition.is_public ?? true}
+                inviteCode={competition.invite_code}
+                testCaseCount={competition.testCaseCount}
+              />
+            )}
           </div>
 
           <div className="space-y-6">

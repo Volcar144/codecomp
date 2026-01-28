@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Code2, Github, Mail, Eye, EyeOff, AlertCircle, Loader2 } from "lucide-react";
 import { signIn, useSession } from "@/lib/auth-client";
+import posthog from "posthog-js";
 
 function LoginForm() {
   const router = useRouter();
@@ -44,10 +45,25 @@ function LoginForm() {
         throw new Error(result.error.message || "Invalid email or password");
       }
 
+      // Identify user in PostHog
+      posthog.identify(email, {
+        email: email,
+      });
+
+      // Capture login event
+      posthog.capture("user_logged_in", {
+        method: "email",
+      });
+
       router.push(redirectTo);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed. Please try again.");
+      const errorMessage = err instanceof Error ? err.message : "Login failed. Please try again.";
+      setError(errorMessage);
+      posthog.capture("login_failed", {
+        method: "email",
+        error: errorMessage,
+      });
     } finally {
       setLoading(false);
     }
@@ -58,12 +74,22 @@ function LoginForm() {
     setGithubLoading(true);
 
     try {
+      // Capture GitHub login attempt
+      posthog.capture("user_logged_in", {
+        method: "github",
+      });
+
       await signIn.social({
         provider: "github",
         callbackURL: redirectTo,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "GitHub login failed");
+      const errorMessage = err instanceof Error ? err.message : "GitHub login failed";
+      setError(errorMessage);
+      posthog.capture("login_failed", {
+        method: "github",
+        error: errorMessage,
+      });
       setGithubLoading(false);
     }
   };

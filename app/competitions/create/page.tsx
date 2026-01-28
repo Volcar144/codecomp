@@ -1,9 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Code2 } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Code2, FileText, Loader2 } from "lucide-react";
+
+interface Template {
+  id: string;
+  name: string;
+  template_title: string | null;
+  template_description: string | null;
+  template_rules: string | null;
+  allowed_languages: string[];
+  default_duration_hours: number;
+  test_cases: Array<{
+    input: string;
+    expected_output: string;
+    points: number;
+    is_hidden: boolean;
+  }>;
+}
 
 const LANGUAGES = [
   { value: "python", label: "Python" },
@@ -15,10 +31,42 @@ const LANGUAGES = [
   { value: "rust", label: "Rust" },
 ];
 
+const SKILL_TIERS = [
+  { value: "", label: "No restriction" },
+  { value: "bronze", label: "🥉 Bronze (0-1399)" },
+  { value: "silver", label: "🥈 Silver (1400-1599)" },
+  { value: "gold", label: "🥇 Gold (1600-1799)" },
+  { value: "platinum", label: "⭐ Platinum (1800-1999)" },
+  { value: "diamond", label: "💠 Diamond (2000-2199)" },
+  { value: "master", label: "💎 Master (2200-2399)" },
+  { value: "grandmaster", label: "🏆 Grandmaster (2400+)" },
+];
+
 export default function CreateCompetitionPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 animate-spin text-blue-600 mx-auto mb-4" />
+          <p className="text-gray-400">Loading...</p>
+        </div>
+      </div>
+    }>
+      <CreateCompetitionContent />
+    </Suspense>
+  );
+}
+
+function CreateCompetitionContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const templateId = searchParams.get("template");
+  
   const [loading, setLoading] = useState(false);
+  const [loadingTemplate, setLoadingTemplate] = useState(!!templateId);
   const [error, setError] = useState("");
+  const [templateName, setTemplateName] = useState<string | null>(null);
+  const [templateTestCases, setTemplateTestCases] = useState<Template["test_cases"]>([]);
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -26,7 +74,55 @@ export default function CreateCompetitionPage() {
     start_date: "",
     end_date: "",
     allowed_languages: ["python", "javascript"],
+    is_public: true,
+    min_skill_rating: "",
+    recommended_skill_tier: "",
   });
+
+  // Load template if templateId is provided
+  useEffect(() => {
+    if (templateId) {
+      loadTemplate(templateId);
+    }
+  }, [templateId]);
+
+  const loadTemplate = async (id: string) => {
+    try {
+      setLoadingTemplate(true);
+      const response = await fetch(`/api/templates/${id}`);
+      
+      if (!response.ok) {
+        throw new Error("Failed to load template");
+      }
+      
+      const template: Template = await response.json();
+      
+      // Calculate default dates based on template duration
+      const startDate = new Date();
+      startDate.setHours(startDate.getHours() + 1); // Start in 1 hour
+      const endDate = new Date(startDate);
+      endDate.setHours(endDate.getHours() + template.default_duration_hours);
+      
+      setFormData({
+        title: template.template_title || "",
+        description: template.template_description || "",
+        rules: template.template_rules || "",
+        start_date: startDate.toISOString().slice(0, 16),
+        end_date: endDate.toISOString().slice(0, 16),
+        allowed_languages: template.allowed_languages || ["python", "javascript"],
+        is_public: true,
+        min_skill_rating: "",
+        recommended_skill_tier: "",
+      });
+      
+      setTemplateName(template.name);
+      setTemplateTestCases(template.test_cases || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load template");
+    } finally {
+      setLoadingTemplate(false);
+    }
+  };
 
   const handleLanguageToggle = (language: string) => {
     setFormData((prev) => ({
@@ -43,6 +139,7 @@ export default function CreateCompetitionPage() {
     setLoading(true);
 
     try {
+      // Create the competition
       const response = await fetch("/api/competitions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -50,10 +147,28 @@ export default function CreateCompetitionPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create competition");
+        const data = await response.json();
+        throw new Error(data.error || "Failed to create competition");
       }
 
       const data = await response.json();
+      
+      // If we used a template with test cases, create them
+      if (templateTestCases.length > 0) {
+        for (const testCase of templateTestCases) {
+          await fetch(`/api/competitions/${data.id}/test-cases`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(testCase),
+          });
+        }
+      }
+      
+      // Increment template use count if used
+      if (templateId) {
+        fetch(`/api/templates/${templateId}/use`, { method: "POST" }).catch(() => {});
+      }
+
       router.push(`/competitions/${data.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create competition");
@@ -61,6 +176,17 @@ export default function CreateCompetitionPage() {
       setLoading(false);
     }
   };
+
+  if (loadingTemplate) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600 dark:text-gray-400">Loading template...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
@@ -81,6 +207,31 @@ export default function CreateCompetitionPage() {
 
       <main className="container mx-auto px-4 py-8 max-w-3xl">
         <h1 className="text-4xl font-bold mb-8">Create Competition</h1>
+
+        {/* Template Banner */}
+        {templateName && (
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6 flex items-center gap-3">
+            <FileText className="h-5 w-5 text-blue-600" />
+            <div>
+              <p className="font-medium text-blue-800 dark:text-blue-200">Using template: {templateName}</p>
+              <p className="text-sm text-blue-600 dark:text-blue-400">
+                {templateTestCases.length > 0 && `${templateTestCases.length} test cases will be created`}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Use Template Link */}
+        {!templateName && (
+          <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-6">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Want to save time? {" "}
+              <Link href="/templates" className="text-blue-600 hover:underline font-medium">
+                Browse templates →
+              </Link>
+            </p>
+          </div>
+        )}
 
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -180,6 +331,88 @@ export default function CreateCompetitionPage() {
                     <span>{lang.label}</span>
                   </label>
                 ))}
+              </div>
+            </div>
+
+            {/* Skill Gating Section */}
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                ⚔️ Skill Requirements
+                <span className="text-xs font-normal text-gray-500">(Optional)</span>
+              </h3>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="min_skill_rating" className="block text-sm font-medium mb-2">
+                    Minimum Skill Rating
+                  </label>
+                  <input
+                    id="min_skill_rating"
+                    type="number"
+                    min="0"
+                    max="3000"
+                    value={formData.min_skill_rating}
+                    onChange={(e) => setFormData({ ...formData, min_skill_rating: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700"
+                    placeholder="e.g., 1600"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Leave empty for no minimum requirement
+                  </p>
+                </div>
+
+                <div>
+                  <label htmlFor="recommended_skill_tier" className="block text-sm font-medium mb-2">
+                    Recommended Skill Tier
+                  </label>
+                  <select
+                    id="recommended_skill_tier"
+                    value={formData.recommended_skill_tier}
+                    onChange={(e) => setFormData({ ...formData, recommended_skill_tier: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700"
+                  >
+                    {SKILL_TIERS.map((tier) => (
+                      <option key={tier.value} value={tier.value}>
+                        {tier.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Shown as a recommendation, not enforced
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Visibility</label>
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 cursor-pointer p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                  <input
+                    type="radio"
+                    name="visibility"
+                    checked={formData.is_public}
+                    onChange={() => setFormData({ ...formData, is_public: true })}
+                    className="w-4 h-4 text-blue-600"
+                  />
+                  <div>
+                    <span className="font-medium">Public</span>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Anyone can discover and join</p>
+                  </div>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                  <input
+                    type="radio"
+                    name="visibility"
+                    checked={!formData.is_public}
+                    onChange={() => setFormData({ ...formData, is_public: false })}
+                    className="w-4 h-4 text-blue-600"
+                  />
+                  <div>
+                    <span className="font-medium">Private</span>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Only you can see it</p>
+                  </div>
+                </label>
               </div>
             </div>
 

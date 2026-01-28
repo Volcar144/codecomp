@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Code2, Mail, ArrowLeft, Loader2, CheckCircle, AlertCircle } from "lucide-react";
 import { requestPasswordReset } from "@/lib/auth-client";
+import posthog from "posthog-js";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -27,9 +28,14 @@ export default function ForgotPasswordPage() {
         throw new Error(result.error.message || "Failed to send reset email");
       }
 
+      // Capture password reset request event
+      posthog.capture("password_reset_requested");
+
       setSuccess(true);
     } catch {
       // Always show success to prevent email enumeration attacks
+      // Still capture the event (user attempted reset)
+      posthog.capture("password_reset_requested");
       setSuccess(true);
     } finally {
       setLoading(false);

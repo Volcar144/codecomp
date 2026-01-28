@@ -19,6 +19,8 @@ export type Database = {
           end_date: string;
           creator_id: string;
           allowed_languages: string[];
+          status: string;
+          is_public: boolean;
           created_at: string;
           updated_at: string;
         };

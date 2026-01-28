@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
+import crypto from "crypto";
+import { getPostHogClient } from "@/lib/posthog-server";
+
+// Generate a unique invite code
+function generateInviteCode(): string {
+  return crypto.randomBytes(6).toString("hex").toUpperCase();
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,7 +22,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { title, description, rules, start_date, end_date, allowed_languages } = body;
+    const { title, description, rules, start_date, end_date, allowed_languages, is_public } = body;
 
     // Validate required fields
     if (!title || typeof title !== 'string' || title.trim().length === 0) {
@@ -47,6 +54,8 @@ export async function POST(request: NextRequest) {
         end_date,
         creator_id: session.user.id,
         allowed_languages,
+        is_public: is_public ?? true,
+        invite_code: is_public === false ? generateInviteCode() : null,
         status: "draft",
       })
       .select()
@@ -56,6 +65,20 @@ export async function POST(request: NextRequest) {
       console.error("Database error:", error);
       return NextResponse.json({ error: "Failed to create competition" }, { status: 500 });
     }
+
+    // Capture server-side competition created event
+    const posthog = getPostHogClient();
+    posthog.capture({
+      distinctId: session.user.email || session.user.id,
+      event: "competition_created",
+      properties: {
+        competition_id: data.id,
+        title: title,
+        is_public: is_public ?? true,
+        allowed_languages: allowed_languages,
+        languages_count: allowed_languages.length,
+      },
+    });
 
     return NextResponse.json(data, { status: 201 });
   } catch (error) {
@@ -70,6 +93,18 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get("status");
     const limit = parseInt(searchParams.get("limit") || "50");
     const offset = parseInt(searchParams.get("offset") || "0");
+    const visibility = searchParams.get("visibility"); // "public", "private", or "all"
+
+    // Try to get the session (optional for public competitions)
+    let userId: string | null = null;
+    try {
+      const session = await auth.api.getSession({
+        headers: await headers(),
+      });
+      userId = session?.user?.id || null;
+    } catch {
+      // User not authenticated, will only see public competitions
+    }
 
     let query = supabase
       .from("competitions")
@@ -77,6 +112,21 @@ export async function GET(request: NextRequest) {
       .neq("status", "draft") // Don't show drafts in public list
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
+
+    // Handle visibility filter
+    if (visibility === "private" && userId) {
+      // Show only user's private competitions
+      query = query.eq("is_public", false).eq("creator_id", userId);
+    } else if (visibility === "public") {
+      // Show only public competitions
+      query = query.eq("is_public", true);
+    } else if (userId) {
+      // Show public competitions + user's private competitions
+      query = query.or(`is_public.eq.true,creator_id.eq.${userId}`);
+    } else {
+      // Unauthenticated: show only public competitions
+      query = query.eq("is_public", true);
+    }
 
     // Filter by status if provided
     if (status && ["active", "upcoming", "ended"].includes(status)) {

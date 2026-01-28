@@ -2,8 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
+import { getPostHogClient } from "@/lib/posthog-server";
+import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
+  // Apply rate limiting
+  const rateLimitResponse = rateLimit(request, RATE_LIMITS.submissions);
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     // Get authenticated session
     const session = await auth.api.getSession({
@@ -27,12 +33,20 @@ export async function POST(request: NextRequest) {
     // Verify competition exists and is active
     const { data: competition, error: compError } = await supabase
       .from("competitions")
-      .select("id, status, start_date, end_date, allowed_languages")
+      .select("id, status, start_date, end_date, allowed_languages, is_public, invite_code, creator_id")
       .eq("id", competition_id)
       .single();
 
     if (compError || !competition) {
       return NextResponse.json({ error: "Competition not found" }, { status: 404 });
+    }
+
+    // Check access for private competitions
+    if (!competition.is_public && competition.creator_id !== session.user.id) {
+      const { invite_code } = body;
+      if (!invite_code || invite_code !== competition.invite_code) {
+        return NextResponse.json({ error: "This is a private competition. Please provide a valid invite code." }, { status: 403 });
+      }
     }
 
     const now = new Date();
@@ -80,6 +94,21 @@ export async function POST(request: NextRequest) {
       console.error("Database error:", error);
       return NextResponse.json({ error: "Failed to save submission" }, { status: 500 });
     }
+
+    // Capture server-side submission event
+    const posthog = getPostHogClient();
+    posthog.capture({
+      distinctId: session.user.email || session.user.id,
+      event: "submission_created",
+      properties: {
+        competition_id: competition_id,
+        language: language,
+        score: score,
+        status: status,
+        passed_tests: executeData.passedTests || 0,
+        total_tests: executeData.totalTests || 0,
+      },
+    });
 
     return NextResponse.json({
       ...data,

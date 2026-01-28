@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Code2, Github, Mail, Eye, EyeOff, AlertCircle, Loader2, Check, X } from "lucide-react";
 import { signUp, signIn, useSession } from "@/lib/auth-client";
+import posthog from "posthog-js";
 
 function RegisterForm() {
   const router = useRouter();
@@ -68,10 +69,26 @@ function RegisterForm() {
         throw new Error(result.error.message || "Registration failed");
       }
 
+      // Identify user in PostHog
+      posthog.identify(email, {
+        email: email,
+        name: name,
+      });
+
+      // Capture signup event
+      posthog.capture("user_signed_up", {
+        method: "email",
+      });
+
       router.push(redirectTo);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Registration failed. Please try again.");
+      const errorMessage = err instanceof Error ? err.message : "Registration failed. Please try again.";
+      setError(errorMessage);
+      posthog.capture("signup_failed", {
+        method: "email",
+        error: errorMessage,
+      });
     } finally {
       setLoading(false);
     }
@@ -82,12 +99,22 @@ function RegisterForm() {
     setGithubLoading(true);
 
     try {
+      // Capture GitHub signup attempt
+      posthog.capture("user_signed_up", {
+        method: "github",
+      });
+
       await signIn.social({
         provider: "github",
         callbackURL: redirectTo,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "GitHub sign up failed");
+      const errorMessage = err instanceof Error ? err.message : "GitHub sign up failed";
+      setError(errorMessage);
+      posthog.capture("signup_failed", {
+        method: "github",
+        error: errorMessage,
+      });
       setGithubLoading(false);
     }
   };

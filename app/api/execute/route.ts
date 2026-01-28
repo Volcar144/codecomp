@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { executeCode, isLanguageSupported } from "@/lib/code-execution";
+import { isLanguageSupported } from "@/lib/code-execution";
+import { executeCodeRateLimited, getRateLimitStatus } from "@/lib/rate-limited-execution";
 import { supabase } from "@/lib/supabase";
 
 // Default test cases if none are found in database
@@ -50,11 +51,11 @@ export async function POST(request: NextRequest) {
       ? testCases.filter((tc) => !tc.isHidden) 
       : testCases;
 
-    // Run code against test cases
+    // Run code against test cases (with rate limiting)
     const results = await Promise.all(
       casesToRun.map(async (testCase) => {
         try {
-          const result = await executeCode(code, language, testCase.input);
+          const result = await executeCodeRateLimited(code, language, testCase.input);
           
           // Check if execution had an error
           if (result.error) {
@@ -107,5 +108,18 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Error executing code:", error);
     return NextResponse.json({ error: "Code execution failed" }, { status: 500 });
+  }
+}
+
+/**
+ * GET endpoint to check rate limit status
+ */
+export async function GET() {
+  try {
+    const status = await getRateLimitStatus();
+    return NextResponse.json(status);
+  } catch (error) {
+    console.error("Error getting rate limit status:", error);
+    return NextResponse.json({ error: "Failed to get rate limit status" }, { status: 500 });
   }
 }
