@@ -46,6 +46,7 @@
     "react-markdown": "^10.1.0",
     "stripe": "^20.2.0",
     "typescript": "^5.9.3",
+    "uuid": "^13.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
