@@ -3,10 +3,11 @@ import axios from "axios";
 // Piston API endpoint - public instance
 const PISTON_API = process.env.CODE_EXECUTION_API_URL || "https://emkc.org/api/v2/piston";
 
-// Execution timeout limits (in milliseconds)
-const COMPILE_TIMEOUT_MS = 10000; // 10 seconds
-const RUN_TIMEOUT_MS = 5000;      // 5 seconds
-const REQUEST_TIMEOUT_MS = 15000; // 15 seconds total
+// Default execution timeout limits (in milliseconds)
+// Can be overridden per-request based on user's subscription plan
+const DEFAULT_COMPILE_TIMEOUT_MS = 10000; // 10 seconds
+const DEFAULT_RUN_TIMEOUT_MS = 5000;      // 5 seconds (free tier)
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000; // 15 seconds total
 
 // Language version mappings for Piston
 const LANGUAGE_MAP: Record<string, { language: string; version: string }> = {
@@ -30,11 +31,13 @@ export interface ExecutionResult {
 
 /**
  * Execute code using Piston API
+ * @param timeoutSeconds - Max execution time in seconds (default 5s free, 30s pro)
  */
 export async function executeCode(
   code: string,
   language: string,
-  input: string = ""
+  input: string = "",
+  timeoutSeconds: number = 10
 ): Promise<ExecutionResult> {
   try {
     const langConfig = LANGUAGE_MAP[language.toLowerCase()];
@@ -44,6 +47,10 @@ export async function executeCode(
     }
 
     const startTime = Date.now();
+    
+    // Convert timeout to milliseconds
+    const runTimeoutMs = timeoutSeconds * 1000;
+    const requestTimeoutMs = runTimeoutMs + DEFAULT_COMPILE_TIMEOUT_MS + 5000; // Add buffer
 
     // Call Piston API
     const response = await axios.post(
@@ -59,8 +66,8 @@ export async function executeCode(
         ],
         stdin: input,
         args: [],
-        compile_timeout: COMPILE_TIMEOUT_MS,
-        run_timeout: RUN_TIMEOUT_MS,
+        compile_timeout: DEFAULT_COMPILE_TIMEOUT_MS,
+        run_timeout: runTimeoutMs,
         compile_memory_limit: -1,
         run_memory_limit: -1,
       },
@@ -68,7 +75,7 @@ export async function executeCode(
         headers: {
           "Content-Type": "application/json",
         },
-        timeout: REQUEST_TIMEOUT_MS,
+        timeout: requestTimeoutMs,
       }
     );
 

@@ -5,8 +5,9 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useSession } from "@/lib/auth-client";
 import { Loading } from "@/components/ui/Loading";
+import Navbar from "@/components/layout/Navbar";
 import { 
-  Code2, Flame, Clock, Trophy, CheckCircle, XCircle, 
+  Flame, Clock, Trophy, CheckCircle, XCircle, 
   Calendar, Zap, ChevronRight, Play, Send, Users
 } from "lucide-react";
 
@@ -25,10 +26,12 @@ interface Challenge {
   description: string;
   difficulty: string;
   category: string;
-  time_limit_seconds: number;
+  time_limit_minutes: number;
   test_cases: TestCase[];
   starter_code: Record<string, string>;
+  allowed_languages: string[];
   xp_reward: number;
+  source_challenge_id?: string;
 }
 
 interface UserSubmission {
@@ -192,25 +195,7 @@ export default function DailyChallengePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
-      <header className="border-b bg-white dark:bg-gray-900">
-        <nav className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Code2 className="h-8 w-8 text-blue-600" />
-            <span className="text-2xl font-bold">CodeComp</span>
-          </Link>
-          <div className="flex gap-4">
-            <Link href="/competitions" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900">
-              Competitions
-            </Link>
-            <Link href="/duels" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900">
-              Duels
-            </Link>
-            <Link href="/profile" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900">
-              Profile
-            </Link>
-          </div>
-        </nav>
-      </header>
+      <Navbar />
 
       <main className="container mx-auto px-4 py-8">
         {/* Streak Banner */}
@@ -257,7 +242,7 @@ export default function DailyChallengePage() {
               <div className="flex items-center gap-4 text-sm text-gray-500 mb-4">
                 <span className="flex items-center gap-1">
                   <Clock className="h-4 w-4" />
-                  {Math.floor(challenge.time_limit_seconds / 60)} min
+                  {challenge.time_limit_minutes} min
                 </span>
                 <span className="flex items-center gap-1">
                   <Zap className="h-4 w-4" />
@@ -301,8 +286,12 @@ export default function DailyChallengePage() {
             {/* Language Selection */}
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-4">
               <div className="flex items-center justify-between">
-                <div className="flex gap-2">
-                  {LANGUAGES.map(lang => (
+                <div className="flex gap-2 flex-wrap">
+                  {LANGUAGES.filter(lang => 
+                    !challenge.allowed_languages || 
+                    challenge.allowed_languages.length === 0 || 
+                    challenge.allowed_languages.includes(lang.id)
+                  ).map(lang => (
                     <button
                       key={lang.id}
                       onClick={() => {

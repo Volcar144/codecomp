@@ -47,6 +47,25 @@ CREATE TABLE IF NOT EXISTS submissions (
   submitted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Execution log table for rate limiting (daily execution counts)
+CREATE TABLE IF NOT EXISTS execution_log (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Index for efficient daily counting
+CREATE INDEX IF NOT EXISTS idx_execution_log_user_date ON execution_log(user_id, created_at);
+
+-- Auto-cleanup old execution logs (older than 2 days)
+-- This keeps the table small while allowing daily limit checks
+CREATE OR REPLACE FUNCTION cleanup_old_execution_logs()
+RETURNS void AS $$
+BEGIN
+  DELETE FROM execution_log WHERE created_at < NOW() - INTERVAL '2 days';
+END;
+$$ LANGUAGE plpgsql;
+
 -- Test results table
 CREATE TABLE IF NOT EXISTS test_results (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -103,6 +122,139 @@ CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status);
 CREATE INDEX IF NOT EXISTS idx_test_cases_competition ON test_cases(competition_id);
 CREATE INDEX IF NOT EXISTS idx_judges_competition ON judges(competition_id);
 CREATE INDEX IF NOT EXISTS idx_prizes_competition ON prizes(competition_id);
+
+-- =============================================================================
+-- Family and Team Subscription Tables
+-- =============================================================================
+
+-- Family members table - tracks members of family plans
+CREATE TABLE IF NOT EXISTS family_members (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  owner_user_id VARCHAR(255) NOT NULL, -- The family plan owner
+  member_user_id VARCHAR(255) NOT NULL, -- The family member
+  status VARCHAR(50) DEFAULT 'active', -- active, removed
+  invited_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  joined_at TIMESTAMP WITH TIME ZONE,
+  removed_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(owner_user_id, member_user_id)
+);
+
+-- Family invitations table - pending invitations
+CREATE TABLE IF NOT EXISTS family_invitations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  owner_user_id VARCHAR(255) NOT NULL, -- The family plan owner
+  email VARCHAR(255) NOT NULL, -- Email to invite
+  token VARCHAR(255) NOT NULL UNIQUE, -- Invitation token
+  status VARCHAR(50) DEFAULT 'pending', -- pending, accepted, expired, canceled
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  accepted_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Teams table - organization/team info (must be created before team_members)
+CREATE TABLE IF NOT EXISTS teams (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name VARCHAR(255) NOT NULL,
+  slug VARCHAR(100) NOT NULL UNIQUE,
+  owner_user_id VARCHAR(255) NOT NULL,
+  subscription_id VARCHAR(255), -- Reference to BetterAuth subscription
+  included_seats INTEGER DEFAULT 5,
+  additional_seats INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Team members table - tracks members of team plans
+CREATE TABLE IF NOT EXISTS team_members (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  user_id VARCHAR(255) NOT NULL,
+  role VARCHAR(50) DEFAULT 'member', -- owner, admin, member
+  status VARCHAR(50) DEFAULT 'active', -- active, removed
+  invited_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  joined_at TIMESTAMP WITH TIME ZONE,
+  removed_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(team_id, user_id)
+);
+
+-- Team invitations table - pending invitations
+CREATE TABLE IF NOT EXISTS team_invitations (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  email VARCHAR(255) NOT NULL,
+  role VARCHAR(50) DEFAULT 'member', -- admin, member
+  token VARCHAR(255) NOT NULL UNIQUE,
+  status VARCHAR(50) DEFAULT 'pending', -- pending, accepted, expired, canceled
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  accepted_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes for family/team tables
+CREATE INDEX IF NOT EXISTS idx_family_members_owner ON family_members(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_family_members_member ON family_members(member_user_id);
+CREATE INDEX IF NOT EXISTS idx_family_invitations_owner ON family_invitations(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_family_invitations_token ON family_invitations(token);
+CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team_id);
+CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_team_invitations_team ON team_invitations(team_id);
+CREATE INDEX IF NOT EXISTS idx_team_invitations_token ON team_invitations(token);
+CREATE INDEX IF NOT EXISTS idx_teams_owner ON teams(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_teams_slug ON teams(slug);
+
+-- Function to check if a user has Pro access (either directly or via family/team)
+CREATE OR REPLACE FUNCTION user_has_pro_access(check_user_id VARCHAR)
+RETURNS BOOLEAN AS $$
+DECLARE
+  has_access BOOLEAN := FALSE;
+BEGIN
+  -- Check for direct subscription (handled by app layer via BetterAuth)
+  -- This function checks family/team membership
+
+  -- Check if user is a family member with active status
+  SELECT EXISTS(
+    SELECT 1 FROM family_members fm
+    JOIN subscription s ON s.reference_id = fm.owner_user_id
+    WHERE fm.member_user_id = check_user_id
+    AND fm.status = 'active'
+    AND s.status = 'active'
+    AND s.plan = 'family'
+  ) INTO has_access;
+
+  IF has_access THEN
+    RETURN TRUE;
+  END IF;
+
+  -- Check if user is a team member with active status
+  SELECT EXISTS(
+    SELECT 1 FROM team_members tm
+    JOIN teams t ON t.id = tm.team_id
+    JOIN subscription s ON s.reference_id = t.owner_user_id
+    WHERE tm.user_id = check_user_id
+    AND tm.status = 'active'
+    AND s.status = 'active'
+    AND s.plan = 'team'
+  ) INTO has_access;
+
+  RETURN has_access;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Cleanup expired invitations (run periodically)
+CREATE OR REPLACE FUNCTION cleanup_expired_invitations()
+RETURNS void AS $$
+BEGIN
+  UPDATE family_invitations 
+  SET status = 'expired' 
+  WHERE status = 'pending' AND expires_at < NOW();
+  
+  UPDATE team_invitations 
+  SET status = 'expired' 
+  WHERE status = 'pending' AND expires_at < NOW();
+END;
+$$ LANGUAGE plpgsql;
 
 -- Row Level Security (RLS) policies
 ALTER TABLE competitions ENABLE ROW LEVEL SECURITY;
@@ -1253,19 +1405,21 @@ ON CONFLICT DO NOTHING;
 -- DAILY CHALLENGES & STREAKS
 -- =============================================
 
--- Daily challenges table
+-- Daily challenges table (auto-generated from duel_challenges pool)
 CREATE TABLE IF NOT EXISTS daily_challenges (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   challenge_date DATE NOT NULL UNIQUE,
   title VARCHAR(255) NOT NULL,
   description TEXT NOT NULL,
-  difficulty VARCHAR(20) DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
+  difficulty VARCHAR(20) DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard', 'expert')),
   category VARCHAR(100),
-  time_limit_seconds INTEGER DEFAULT 1800, -- 30 minutes
+  time_limit_minutes INTEGER DEFAULT 30,
   test_cases JSONB NOT NULL, -- [{input, expected_output, points}]
   starter_code JSONB DEFAULT '{}', -- {language: code}
+  allowed_languages TEXT[] DEFAULT ARRAY['python', 'javascript', 'java', 'cpp', 'go'],
   xp_reward INTEGER DEFAULT 100,
   streak_bonus_multiplier DECIMAL(3,2) DEFAULT 1.5,
+  source_challenge_id UUID REFERENCES duel_challenges(id), -- Which duel challenge this was generated from
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -1610,29 +1764,178 @@ INSERT INTO duel_challenges (title, description, difficulty, category, time_limi
  '[{"input": "[0,1,0,2,1,0,1,3,2,1,2,1]", "expected_output": "6", "points": 25}, {"input": "[4,2,0,3,2,5]", "expected_output": "9", "points": 25}, {"input": "[1,2,1]", "expected_output": "0", "points": 25}, {"input": "[3,0,0,2,0,4]", "expected_output": "10", "points": 25}]'),
 
 ('Serialize Tree', 'Serialize and deserialize a binary tree to/from string.', 'hard', 'trees', 600,
- '[{"input": "[1,2,3,null,null,4,5]", "expected_output": "[1,2,3,null,null,4,5]", "points": 34}, {"input": "[]", "expected_output": "[]", "points": 33}, {"input": "[1]", "expected_output": "[1]", "points": 33}]')
+ '[{"input": "[1,2,3,null,null,4,5]", "expected_output": "[1,2,3,null,null,4,5]", "points": 34}, {"input": "[]", "expected_output": "[]", "points": 33}, {"input": "[1]", "expected_output": "[1]", "points": 33}]'),
+
+-- =============================================
+-- ADDITIONAL EASY CHALLENGES WITH EDGE CASES
+-- =============================================
+
+('Fibonacci Number', 'Return the nth Fibonacci number. F(0)=0, F(1)=1, F(n)=F(n-1)+F(n-2)', 'easy', 'math', 180,
+ '[{"input": "0", "expected_output": "0", "points": 20}, {"input": "1", "expected_output": "1", "points": 20}, {"input": "10", "expected_output": "55", "points": 20}, {"input": "20", "expected_output": "6765", "points": 20}, {"input": "2", "expected_output": "1", "points": 20}]'),
+
+('Count Characters', 'Count occurrences of a character in a string (case-sensitive).', 'easy', 'strings', 180,
+ '[{"input": "hello\nl", "expected_output": "2", "points": 25}, {"input": "aaaaaa\na", "expected_output": "6", "points": 25}, {"input": "test\nz", "expected_output": "0", "points": 25}, {"input": "\na", "expected_output": "0", "points": 25}]'),
+
+('Array Average', 'Calculate the average of all numbers in an array. Return as float with 2 decimals.', 'easy', 'arrays', 180,
+ '[{"input": "[1, 2, 3, 4, 5]", "expected_output": "3.00", "points": 25}, {"input": "[10]", "expected_output": "10.00", "points": 25}, {"input": "[1, 2]", "expected_output": "1.50", "points": 25}, {"input": "[-5, 5]", "expected_output": "0.00", "points": 25}]'),
+
+('Is Prime', 'Check if a number is prime. Return "true" or "false".', 'easy', 'math', 180,
+ '[{"input": "2", "expected_output": "true", "points": 20}, {"input": "1", "expected_output": "false", "points": 20}, {"input": "17", "expected_output": "true", "points": 20}, {"input": "4", "expected_output": "false", "points": 20}, {"input": "0", "expected_output": "false", "points": 20}]'),
+
+('Reverse Array', 'Reverse an array in place and return it.', 'easy', 'arrays', 180,
+ '[{"input": "[1, 2, 3, 4, 5]", "expected_output": "[5, 4, 3, 2, 1]", "points": 25}, {"input": "[]", "expected_output": "[]", "points": 25}, {"input": "[1]", "expected_output": "[1]", "points": 25}, {"input": "[1, 2]", "expected_output": "[2, 1]", "points": 25}]'),
+
+('Sum of Digits', 'Return the sum of all digits in a positive integer.', 'easy', 'math', 180,
+ '[{"input": "12345", "expected_output": "15", "points": 25}, {"input": "0", "expected_output": "0", "points": 25}, {"input": "9", "expected_output": "9", "points": 25}, {"input": "999", "expected_output": "27", "points": 25}]'),
+
+('Title Case', 'Convert a string to title case (capitalize first letter of each word).', 'easy', 'strings', 180,
+ '[{"input": "hello world", "expected_output": "Hello World", "points": 25}, {"input": "a", "expected_output": "A", "points": 25}, {"input": "HELLO", "expected_output": "Hello", "points": 25}, {"input": "the quick brown fox", "expected_output": "The Quick Brown Fox", "points": 25}]'),
+
+('Count Words', 'Count the number of words in a string (space-separated).', 'easy', 'strings', 180,
+ '[{"input": "hello world", "expected_output": "2", "points": 25}, {"input": "one", "expected_output": "1", "points": 25}, {"input": "  spaces  everywhere  ", "expected_output": "2", "points": 25}, {"input": "", "expected_output": "0", "points": 25}]'),
+
+('Find Minimum', 'Find and return the minimum value in an array.', 'easy', 'arrays', 180,
+ '[{"input": "[3, 1, 4, 1, 5, 9]", "expected_output": "1", "points": 25}, {"input": "[-5, -2, -10]", "expected_output": "-10", "points": 25}, {"input": "[42]", "expected_output": "42", "points": 25}, {"input": "[0, 0, 0]", "expected_output": "0", "points": 25}]'),
+
+('String Length', 'Return the length of a string without using built-in length function.', 'easy', 'strings', 180,
+ '[{"input": "hello", "expected_output": "5", "points": 25}, {"input": "", "expected_output": "0", "points": 25}, {"input": "a", "expected_output": "1", "points": 25}, {"input": "   ", "expected_output": "3", "points": 25}]'),
+
+('Multiply Array', 'Return the product of all elements in an array.', 'easy', 'arrays', 180,
+ '[{"input": "[1, 2, 3, 4]", "expected_output": "24", "points": 25}, {"input": "[5]", "expected_output": "5", "points": 25}, {"input": "[2, 0, 3]", "expected_output": "0", "points": 25}, {"input": "[-1, -1]", "expected_output": "1", "points": 25}]'),
+
+('Remove Spaces', 'Remove all spaces from a string.', 'easy', 'strings', 180,
+ '[{"input": "hello world", "expected_output": "helloworld", "points": 25}, {"input": "  a  b  c  ", "expected_output": "abc", "points": 25}, {"input": "nospaces", "expected_output": "nospaces", "points": 25}, {"input": "   ", "expected_output": "", "points": 25}]'),
+
+('GCD', 'Find the Greatest Common Divisor of two positive integers.', 'easy', 'math', 180,
+ '[{"input": "48\n18", "expected_output": "6", "points": 25}, {"input": "7\n3", "expected_output": "1", "points": 25}, {"input": "100\n25", "expected_output": "25", "points": 25}, {"input": "17\n17", "expected_output": "17", "points": 25}]'),
+
+('Count Positive', 'Count how many positive numbers are in an array.', 'easy', 'arrays', 180,
+ '[{"input": "[1, -2, 3, -4, 5]", "expected_output": "3", "points": 25}, {"input": "[-1, -2, -3]", "expected_output": "0", "points": 25}, {"input": "[0]", "expected_output": "0", "points": 25}, {"input": "[1, 2, 3]", "expected_output": "3", "points": 25}]'),
+
+('String Contains', 'Check if string contains a substring. Return "true" or "false".', 'easy', 'strings', 180,
+ '[{"input": "hello world\nworld", "expected_output": "true", "points": 25}, {"input": "hello\nxyz", "expected_output": "false", "points": 25}, {"input": "aaa\na", "expected_output": "true", "points": 25}, {"input": "\n", "expected_output": "true", "points": 25}]'),
+
+-- =============================================
+-- ADDITIONAL MEDIUM CHALLENGES WITH EDGE CASES  
+-- =============================================
+
+('Two Sum Sorted', 'Find two numbers in a sorted array that add to target. Return indices (1-indexed).', 'medium', 'arrays', 300,
+ '[{"input": "[2,7,11,15]\n9", "expected_output": "[1,2]", "points": 25}, {"input": "[2,3,4]\n6", "expected_output": "[1,3]", "points": 25}, {"input": "[-1,0]\n-1", "expected_output": "[1,2]", "points": 25}, {"input": "[1,2,3,4,5]\n9", "expected_output": "[4,5]", "points": 25}]'),
+
+('Merge Sorted Arrays', 'Merge two sorted arrays into one sorted array.', 'medium', 'arrays', 300,
+ '[{"input": "[1,3,5]\n[2,4,6]", "expected_output": "[1,2,3,4,5,6]", "points": 25}, {"input": "[]\n[1,2,3]", "expected_output": "[1,2,3]", "points": 25}, {"input": "[1]\n[2]", "expected_output": "[1,2]", "points": 25}, {"input": "[1,1]\n[1,1]", "expected_output": "[1,1,1,1]", "points": 25}]'),
+
+('First Non-Repeating', 'Find the first non-repeating character in a string. Return its index or -1.', 'medium', 'strings', 300,
+ '[{"input": "leetcode", "expected_output": "0", "points": 25}, {"input": "loveleetcode", "expected_output": "2", "points": 25}, {"input": "aabb", "expected_output": "-1", "points": 25}, {"input": "a", "expected_output": "0", "points": 25}]'),
+
+('Product Except Self', 'Return array where each element is product of all others except itself.', 'medium', 'arrays', 360,
+ '[{"input": "[1,2,3,4]", "expected_output": "[24,12,8,6]", "points": 25}, {"input": "[-1,1,0,-3,3]", "expected_output": "[0,0,9,0,0]", "points": 25}, {"input": "[2,2]", "expected_output": "[2,2]", "points": 25}, {"input": "[1,0]", "expected_output": "[0,1]", "points": 25}]'),
+
+('Longest Palindrome', 'Find the longest palindromic substring in a string.', 'medium', 'strings', 360,
+ '[{"input": "babad", "expected_output": "bab", "points": 25}, {"input": "cbbd", "expected_output": "bb", "points": 25}, {"input": "a", "expected_output": "a", "points": 25}, {"input": "ac", "expected_output": "a", "points": 25}]'),
+
+('3Sum', 'Find all unique triplets that sum to zero.', 'medium', 'arrays', 420,
+ '[{"input": "[-1,0,1,2,-1,-4]", "expected_output": "[[-1,-1,2],[-1,0,1]]", "points": 34}, {"input": "[]", "expected_output": "[]", "points": 33}, {"input": "[0]", "expected_output": "[]", "points": 33}]'),
+
+('String Multiply', 'Multiply two non-negative integers represented as strings.', 'medium', 'strings', 360,
+ '[{"input": "2\n3", "expected_output": "6", "points": 25}, {"input": "123\n456", "expected_output": "56088", "points": 25}, {"input": "0\n999", "expected_output": "0", "points": 25}, {"input": "999\n0", "expected_output": "0", "points": 25}]'),
+
+('Container With Most Water', 'Find two lines that form a container holding the most water.', 'medium', 'arrays', 360,
+ '[{"input": "[1,8,6,2,5,4,8,3,7]", "expected_output": "49", "points": 25}, {"input": "[1,1]", "expected_output": "1", "points": 25}, {"input": "[4,3,2,1,4]", "expected_output": "16", "points": 25}, {"input": "[1,2,1]", "expected_output": "2", "points": 25}]'),
+
+('Jump Game', 'Determine if you can reach the last index. Each element is max jump length.', 'medium', 'dynamic-programming', 300,
+ '[{"input": "[2,3,1,1,4]", "expected_output": "true", "points": 25}, {"input": "[3,2,1,0,4]", "expected_output": "false", "points": 25}, {"input": "[0]", "expected_output": "true", "points": 25}, {"input": "[2,0,0]", "expected_output": "true", "points": 25}]'),
+
+('Find Peak', 'Find a peak element (greater than neighbors). Return its index.', 'medium', 'arrays', 300,
+ '[{"input": "[1,2,3,1]", "expected_output": "2", "points": 25}, {"input": "[1,2,1,3,5,6,4]", "expected_output": "5", "points": 25}, {"input": "[1]", "expected_output": "0", "points": 25}, {"input": "[1,2]", "expected_output": "1", "points": 25}]'),
+
+('Pow(x,n)', 'Implement pow(x, n) which calculates x raised to the power n.', 'medium', 'math', 300,
+ '[{"input": "2.0\n10", "expected_output": "1024.0", "points": 25}, {"input": "2.1\n3", "expected_output": "9.261", "points": 25}, {"input": "2.0\n-2", "expected_output": "0.25", "points": 25}, {"input": "1.0\n100", "expected_output": "1.0", "points": 25}]'),
+
+('Search Rotated Array', 'Search for target in a rotated sorted array. Return index or -1.', 'medium', 'arrays', 360,
+ '[{"input": "[4,5,6,7,0,1,2]\n0", "expected_output": "4", "points": 25}, {"input": "[4,5,6,7,0,1,2]\n3", "expected_output": "-1", "points": 25}, {"input": "[1]\n0", "expected_output": "-1", "points": 25}, {"input": "[1]\n1", "expected_output": "0", "points": 25}]'),
+
+('Subarray Sum K', 'Count subarrays that sum to k.', 'medium', 'arrays', 360,
+ '[{"input": "[1,1,1]\n2", "expected_output": "2", "points": 25}, {"input": "[1,2,3]\n3", "expected_output": "2", "points": 25}, {"input": "[1]\n0", "expected_output": "0", "points": 25}, {"input": "[0,0,0]\n0", "expected_output": "6", "points": 25}]'),
+
+('Letter Combinations', 'Return all letter combinations from phone number digits.', 'medium', 'backtracking', 360,
+ '[{"input": "23", "expected_output": "[\"ad\",\"ae\",\"af\",\"bd\",\"be\",\"bf\",\"cd\",\"ce\",\"cf\"]", "points": 34}, {"input": "", "expected_output": "[]", "points": 33}, {"input": "2", "expected_output": "[\"a\",\"b\",\"c\"]", "points": 33}]'),
+
+('Sort Colors', 'Sort an array with values 0, 1, 2 (Dutch National Flag).', 'medium', 'arrays', 300,
+ '[{"input": "[2,0,2,1,1,0]", "expected_output": "[0,0,1,1,2,2]", "points": 25}, {"input": "[2,0,1]", "expected_output": "[0,1,2]", "points": 25}, {"input": "[0]", "expected_output": "[0]", "points": 25}, {"input": "[1,1,1]", "expected_output": "[1,1,1]", "points": 25}]'),
+
+-- =============================================
+-- ADDITIONAL HARD CHALLENGES WITH EDGE CASES
+-- =============================================
+
+('Minimum Window', 'Find minimum window substring containing all characters of t.', 'hard', 'strings', 480,
+ '[{"input": "ADOBECODEBANC\nABC", "expected_output": "BANC", "points": 25}, {"input": "a\na", "expected_output": "a", "points": 25}, {"input": "a\naa", "expected_output": "", "points": 25}, {"input": "aa\naa", "expected_output": "aa", "points": 25}]'),
+
+('Edit Distance', 'Find minimum operations to convert word1 to word2 (insert, delete, replace).', 'hard', 'dynamic-programming', 420,
+ '[{"input": "horse\nros", "expected_output": "3", "points": 25}, {"input": "intention\nexecution", "expected_output": "5", "points": 25}, {"input": "a\na", "expected_output": "0", "points": 25}, {"input": "\nabc", "expected_output": "3", "points": 25}]'),
+
+('Regular Expression', 'Implement regex matching with . and * support.', 'hard', 'dynamic-programming', 480,
+ '[{"input": "aa\na", "expected_output": "false", "points": 25}, {"input": "aa\na*", "expected_output": "true", "points": 25}, {"input": "ab\n.*", "expected_output": "true", "points": 25}, {"input": "aab\nc*a*b", "expected_output": "true", "points": 25}]'),
+
+('Largest Rectangle', 'Find largest rectangle area in histogram.', 'hard', 'stacks', 420,
+ '[{"input": "[2,1,5,6,2,3]", "expected_output": "10", "points": 25}, {"input": "[2,4]", "expected_output": "4", "points": 25}, {"input": "[1]", "expected_output": "1", "points": 25}, {"input": "[0,9]", "expected_output": "9", "points": 25}]'),
+
+('Alien Dictionary', 'Given sorted alien words, find character order.', 'hard', 'graphs', 480,
+ '[{"input": "[\"wrt\",\"wrf\",\"er\",\"ett\",\"rftt\"]", "expected_output": "wertf", "points": 34}, {"input": "[\"z\",\"x\"]", "expected_output": "zx", "points": 33}, {"input": "[\"z\",\"x\",\"z\"]", "expected_output": "", "points": 33}]'),
+
+('Burst Balloons', 'Find maximum coins from bursting balloons.', 'hard', 'dynamic-programming', 480,
+ '[{"input": "[3,1,5,8]", "expected_output": "167", "points": 25}, {"input": "[1,5]", "expected_output": "10", "points": 25}, {"input": "[1]", "expected_output": "1", "points": 25}, {"input": "[7,9,8,0,7,1,3,5,5,2]", "expected_output": "1582", "points": 25}]'),
+
+('Count Smaller', 'Count smaller elements to the right for each element.', 'hard', 'arrays', 420,
+ '[{"input": "[5,2,6,1]", "expected_output": "[2,1,1,0]", "points": 25}, {"input": "[-1]", "expected_output": "[0]", "points": 25}, {"input": "[-1,-1]", "expected_output": "[0,0]", "points": 25}, {"input": "[1,0,2]", "expected_output": "[1,0,0]", "points": 25}]'),
+
+('Longest Increasing Path', 'Find longest increasing path in a matrix.', 'hard', 'dynamic-programming', 480,
+ '[{"input": "[[9,9,4],[6,6,8],[2,1,1]]", "expected_output": "4", "points": 25}, {"input": "[[3,4,5],[3,2,6],[2,2,1]]", "expected_output": "4", "points": 25}, {"input": "[[1]]", "expected_output": "1", "points": 25}, {"input": "[[1,2]]", "expected_output": "2", "points": 25}]'),
+
+('Skyline', 'Compute the skyline of buildings.', 'hard', 'divide-conquer', 600,
+ '[{"input": "[[2,9,10],[3,7,15],[5,12,12],[15,20,10],[19,24,8]]", "expected_output": "[[2,10],[3,15],[7,12],[12,0],[15,10],[20,8],[24,0]]", "points": 50}, {"input": "[[0,2,3],[2,5,3]]", "expected_output": "[[0,3],[5,0]]", "points": 50}]'),
+
+('Palindrome Pairs', 'Find all pairs of indices where concatenation is a palindrome.', 'hard', 'strings', 480,
+ '[{"input": "[\"abcd\",\"dcba\",\"lls\",\"s\",\"sssll\"]", "expected_output": "[[0,1],[1,0],[3,2],[2,4]]", "points": 34}, {"input": "[\"bat\",\"tab\",\"cat\"]", "expected_output": "[[0,1],[1,0]]", "points": 33}, {"input": "[\"a\",\"\"]", "expected_output": "[[0,1],[1,0]]", "points": 33}]'),
+
+('Smallest Range', 'Find smallest range including at least one number from each of k lists.', 'hard', 'heaps', 480,
+ '[{"input": "[[4,10,15,24,26],[0,9,12,20],[5,18,22,30]]", "expected_output": "[20,24]", "points": 34}, {"input": "[[1,2,3],[1,2,3],[1,2,3]]", "expected_output": "[1,1]", "points": 33}, {"input": "[[1],[2],[3]]", "expected_output": "[1,3]", "points": 33}]'),
+
+('Critical Connections', 'Find all critical connections (bridges) in a network.', 'hard', 'graphs', 600,
+ '[{"input": "4\n[[0,1],[1,2],[2,0],[1,3]]", "expected_output": "[[1,3]]", "points": 50}, {"input": "2\n[[0,1]]", "expected_output": "[[0,1]]", "points": 50}]'),
+
+-- =============================================  
+-- EXPERT CHALLENGES
+-- =============================================
+
+('Sudoku Solver', 'Solve a 9x9 Sudoku puzzle.', 'expert', 'backtracking', 900,
+ '[{"input": "[[\"5\",\"3\",\".\",\".\",\"7\",\".\",\".\",\".\",\".\"],[\"6\",\".\",\".\",\"1\",\"9\",\"5\",\".\",\".\",\".\"],[\".\",\"9\",\"8\",\".\",\".\",\".\",\".\",\"6\",\".\"],[\"8\",\".\",\".\",\".\",\"6\",\".\",\".\",\".\",\"3\"],[\"4\",\".\",\".\",\"8\",\".\",\"3\",\".\",\".\",\"1\"],[\"7\",\".\",\".\",\".\",\"2\",\".\",\".\",\".\",\"6\"],[\".\",\"6\",\".\",\".\",\".\",\".\",\"2\",\"8\",\".\"],[\".\",\".\",\".\",\"4\",\"1\",\"9\",\".\",\".\",\"5\"],[\".\",\".\",\".\",\".\",\"8\",\".\",\".\",\"7\",\"9\"]]", "expected_output": "[[\"5\",\"3\",\"4\",\"6\",\"7\",\"8\",\"9\",\"1\",\"2\"],[\"6\",\"7\",\"2\",\"1\",\"9\",\"5\",\"3\",\"4\",\"8\"],[\"1\",\"9\",\"8\",\"3\",\"4\",\"2\",\"5\",\"6\",\"7\"],[\"8\",\"5\",\"9\",\"7\",\"6\",\"1\",\"4\",\"2\",\"3\"],[\"4\",\"2\",\"6\",\"8\",\"5\",\"3\",\"7\",\"9\",\"1\"],[\"7\",\"1\",\"3\",\"9\",\"2\",\"4\",\"8\",\"5\",\"6\"],[\"9\",\"6\",\"1\",\"5\",\"3\",\"7\",\"2\",\"8\",\"4\"],[\"2\",\"8\",\"7\",\"4\",\"1\",\"9\",\"6\",\"3\",\"5\"],[\"3\",\"4\",\"5\",\"2\",\"8\",\"6\",\"1\",\"7\",\"9\"]]", "points": 100}]'),
+
+('Word Search II', 'Find all words from dictionary that exist in the board.', 'expert', 'tries', 900,
+ '[{"input": "[[\"o\",\"a\",\"a\",\"n\"],[\"e\",\"t\",\"a\",\"e\"],[\"i\",\"h\",\"k\",\"r\"],[\"i\",\"f\",\"l\",\"v\"]]\n[\"oath\",\"pea\",\"eat\",\"rain\"]", "expected_output": "[\"eat\",\"oath\"]", "points": 50}, {"input": "[[\"a\",\"b\"],[\"c\",\"d\"]]\n[\"abcb\"]", "expected_output": "[]", "points": 50}]'),
+
+('Prefix and Suffix', 'Design WordFilter with prefix and suffix search.', 'expert', 'design', 900,
+ '[{"input": "apple\nf:a,s:e", "expected_output": "0", "points": 50}, {"input": "test\nf:t,s:t", "expected_output": "0", "points": 50}]'),
+
+('Maximum Frequency Stack', 'Design a stack that pops most frequent element.', 'expert', 'design', 900,
+ '[{"input": "push(5)\npush(7)\npush(5)\npush(7)\npush(4)\npush(5)\npop()\npop()\npop()\npop()", "expected_output": "5\n7\n5\n4", "points": 100}]'),
+
+('Shortest Superstring', 'Find shortest string containing all given strings as substrings.', 'expert', 'dynamic-programming', 1200,
+ '[{"input": "[\"alex\",\"loves\",\"leetcode\"]", "expected_output": "alexlovesleetcode", "points": 50}, {"input": "[\"catg\",\"ctaagt\",\"gcta\",\"ttca\",\"atgcatc\"]", "expected_output": "gctaagttcatgcatc", "points": 50}]')
 
 ON CONFLICT DO NOTHING;
 
 -- =============================================
--- SEED DAILY CHALLENGES
+-- DAILY CHALLENGES AUTO-GENERATION
 -- =============================================
+-- Daily challenges are now auto-generated from the duel_challenges pool.
+-- The API (app/api/daily/route.ts) selects a challenge deterministically based on the date.
+-- No manual seeding required - just ensure duel_challenges table is populated.
 
--- Pre-seed some daily challenges
-INSERT INTO daily_challenges (challenge_date, title, description, difficulty, category, time_limit_seconds, test_cases, xp_reward) VALUES
-(CURRENT_DATE, 'Today''s Challenge: String Compression', 'Compress a string using counts of repeated characters. "aabcccccaaa" becomes "a2b1c5a3".', 'medium', 'strings', 1200,
- '[{"input": "aabcccccaaa", "expected_output": "a2b1c5a3", "points": 25}, {"input": "abcd", "expected_output": "a1b1c1d1", "points": 25}, {"input": "aaa", "expected_output": "a3", "points": 25}, {"input": "", "expected_output": "", "points": 25}]', 100),
- 
-(CURRENT_DATE + INTERVAL '1 day', 'Tomorrow: Array Rotation', 'Rotate array elements to the left by k positions.', 'easy', 'arrays', 900,
- '[{"input": "[1,2,3,4,5]\n2", "expected_output": "[3,4,5,1,2]", "points": 25}, {"input": "[1,2,3]\n1", "expected_output": "[2,3,1]", "points": 25}, {"input": "[1]\n0", "expected_output": "[1]", "points": 25}, {"input": "[1,2]\n2", "expected_output": "[1,2]", "points": 25}]', 75),
-
-(CURRENT_DATE + INTERVAL '2 days', 'Day 3: Matrix Diagonal', 'Find the sum of both diagonals of a square matrix.', 'medium', 'arrays', 1200,
- '[{"input": "[[1,2,3],[4,5,6],[7,8,9]]", "expected_output": "25", "points": 25}, {"input": "[[1]]", "expected_output": "1", "points": 25}, {"input": "[[1,2],[3,4]]", "expected_output": "10", "points": 25}, {"input": "[[5,0,0],[0,5,0],[0,0,5]]", "expected_output": "15", "points": 25}]', 100),
-
-(CURRENT_DATE + INTERVAL '3 days', 'Day 4: Prime Sieve', 'Find all prime numbers up to N using Sieve of Eratosthenes.', 'hard', 'math', 1800,
- '[{"input": "10", "expected_output": "[2,3,5,7]", "points": 25}, {"input": "2", "expected_output": "[2]", "points": 25}, {"input": "20", "expected_output": "[2,3,5,7,11,13,17,19]", "points": 25}, {"input": "1", "expected_output": "[]", "points": 25}]', 150)
-
-ON CONFLICT (challenge_date) DO NOTHING;
+-- Difficulty selection by day of week:
+-- Monday-Tuesday: Easy
+-- Wednesday-Friday: Medium
+-- Saturday-Sunday: Hard
 
 -- =============================================
 -- HELPER FUNCTIONS
@@ -1748,5 +2051,871 @@ BEGIN
     total_members = EXCLUDED.total_members,
     avg_skill_rating = EXCLUDED.avg_skill_rating,
     updated_at = NOW();
+END;
+$$ LANGUAGE plpgsql;
+
+-- =============================================
+-- FRIENDS SYSTEM
+-- =============================================
+
+-- Friend requests and friendships
+CREATE TABLE IF NOT EXISTS friendships (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id VARCHAR(255) NOT NULL,
+  friend_id VARCHAR(255) NOT NULL,
+  status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'blocked')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  accepted_at TIMESTAMP WITH TIME ZONE,
+  UNIQUE(user_id, friend_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_friendships_user ON friendships(user_id);
+CREATE INDEX IF NOT EXISTS idx_friendships_friend ON friendships(friend_id);
+CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(status);
+
+-- User online status
+CREATE TABLE IF NOT EXISTS user_presence (
+  user_id VARCHAR(255) PRIMARY KEY,
+  is_online BOOLEAN DEFAULT FALSE,
+  last_seen TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  current_activity VARCHAR(100), -- 'in_duel', 'in_competition', 'browsing', etc.
+  activity_details JSONB DEFAULT '{}'
+);
+
+-- =============================================
+-- NOTIFICATIONS SYSTEM
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id VARCHAR(255) NOT NULL,
+  type VARCHAR(50) NOT NULL, -- 'friend_request', 'duel_invite', 'achievement', 'competition_start', etc.
+  title VARCHAR(255) NOT NULL,
+  message TEXT,
+  data JSONB DEFAULT '{}', -- Additional data like links, IDs
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(user_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+
+-- Notification preferences
+CREATE TABLE IF NOT EXISTS notification_preferences (
+  user_id VARCHAR(255) PRIMARY KEY,
+  email_friend_requests BOOLEAN DEFAULT TRUE,
+  email_duel_invites BOOLEAN DEFAULT TRUE,
+  email_competition_reminders BOOLEAN DEFAULT TRUE,
+  email_achievements BOOLEAN DEFAULT FALSE,
+  push_enabled BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- =============================================
+-- TUTORIAL SYSTEM
+-- =============================================
+
+-- Tutorial lessons
+CREATE TABLE IF NOT EXISTS tutorial_lessons (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  slug VARCHAR(100) UNIQUE NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  category VARCHAR(50) NOT NULL, -- 'basics', 'arrays', 'strings', 'algorithms', 'data-structures'
+  difficulty VARCHAR(20) DEFAULT 'beginner' CHECK (difficulty IN ('beginner', 'intermediate', 'advanced')),
+  order_index INTEGER DEFAULT 0,
+  content TEXT NOT NULL, -- Markdown content with explanations
+  hints JSONB DEFAULT '[]', -- Array of hints that unlock progressively
+  starter_code JSONB DEFAULT '{}', -- {language: code}
+  solution_code JSONB DEFAULT '{}', -- {language: code}
+  test_cases JSONB NOT NULL,
+  xp_reward INTEGER DEFAULT 25,
+  estimated_minutes INTEGER DEFAULT 10,
+  prerequisites UUID[] DEFAULT '{}', -- Array of lesson IDs that should be completed first
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tutorial_lessons_category ON tutorial_lessons(category);
+CREATE INDEX IF NOT EXISTS idx_tutorial_lessons_difficulty ON tutorial_lessons(difficulty);
+CREATE INDEX IF NOT EXISTS idx_tutorial_lessons_order ON tutorial_lessons(category, order_index);
+
+-- User tutorial progress
+CREATE TABLE IF NOT EXISTS tutorial_progress (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id VARCHAR(255) NOT NULL,
+  lesson_id UUID NOT NULL REFERENCES tutorial_lessons(id) ON DELETE CASCADE,
+  status VARCHAR(20) DEFAULT 'not_started' CHECK (status IN ('not_started', 'in_progress', 'completed')),
+  hints_used INTEGER DEFAULT 0,
+  attempts INTEGER DEFAULT 0,
+  best_code TEXT,
+  best_language VARCHAR(50),
+  completed_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(user_id, lesson_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tutorial_progress_user ON tutorial_progress(user_id);
+
+-- =============================================
+-- GLOBAL LEADERBOARD VIEWS
+-- =============================================
+
+-- Skill rating leaderboard
+CREATE OR REPLACE VIEW skill_leaderboard AS
+SELECT 
+  ur.user_id,
+  u.name as username,
+  ur.skill_rating,
+  ur.skill_tier,
+  ur.total_competitions,
+  ur.total_wins,
+  COALESCE(ds.duel_wins, 0) as duel_wins,
+  COALESCE(ds.duel_losses, 0) as duel_losses,
+  COALESCE(us.current_streak, 0) as daily_streak,
+  COALESCE(us.total_xp_earned, 0) as total_xp,
+  ROW_NUMBER() OVER (ORDER BY ur.skill_rating DESC) as rank
+FROM user_ratings ur
+LEFT JOIN "user" u ON u.id = ur.user_id
+LEFT JOIN (
+  SELECT 
+    CASE WHEN winner_id = player1_id THEN player1_id ELSE player2_id END as user_id,
+    COUNT(*) FILTER (WHERE winner_id IS NOT NULL) as duel_wins,
+    0 as duel_losses
+  FROM duels WHERE status = 'completed'
+  GROUP BY 1
+) ds ON ds.user_id = ur.user_id
+LEFT JOIN user_streaks us ON us.user_id = ur.user_id
+ORDER BY ur.skill_rating DESC;
+
+-- Weekly leaderboard (competitions won this week)
+CREATE OR REPLACE VIEW weekly_leaderboard AS
+SELECT 
+  l.user_id,
+  u.name as username,
+  COUNT(*) FILTER (WHERE l.rank = 1) as wins_this_week,
+  SUM(l.best_score) as total_score,
+  COALESCE(ur.skill_rating, 1000) as skill_rating,
+  ROW_NUMBER() OVER (ORDER BY COUNT(*) FILTER (WHERE l.rank = 1) DESC, SUM(l.best_score) DESC) as rank
+FROM leaderboard l
+JOIN competitions c ON c.id = l.competition_id
+LEFT JOIN "user" u ON u.id = l.user_id
+LEFT JOIN user_ratings ur ON ur.user_id = l.user_id
+WHERE c.end_date >= NOW() - INTERVAL '7 days'
+GROUP BY l.user_id, u.name, ur.skill_rating
+ORDER BY wins_this_week DESC, total_score DESC;
+
+-- =============================================
+-- RLS POLICIES FOR NEW TABLES
+-- =============================================
+
+ALTER TABLE friendships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_presence ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_preferences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tutorial_lessons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tutorial_progress ENABLE ROW LEVEL SECURITY;
+
+-- Friends policies
+CREATE POLICY "Users can see their own friendships" ON friendships FOR SELECT USING (true);
+CREATE POLICY "Users can create friend requests" ON friendships FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update their friendships" ON friendships FOR UPDATE USING (true);
+CREATE POLICY "Users can delete their friendships" ON friendships FOR DELETE USING (true);
+
+-- Presence policies
+CREATE POLICY "Anyone can see online status" ON user_presence FOR SELECT USING (true);
+CREATE POLICY "Users can update their presence" ON user_presence FOR ALL USING (true);
+
+-- Notification policies
+CREATE POLICY "Users see own notifications" ON notifications FOR SELECT USING (true);
+CREATE POLICY "System can create notifications" ON notifications FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update own notifications" ON notifications FOR UPDATE USING (true);
+
+-- Notification preferences
+CREATE POLICY "Users manage own preferences" ON notification_preferences FOR ALL USING (true);
+
+-- Tutorial policies
+CREATE POLICY "Anyone can view tutorials" ON tutorial_lessons FOR SELECT USING (true);
+CREATE POLICY "Users track own progress" ON tutorial_progress FOR ALL USING (true);
+
+-- =============================================
+-- SEED TUTORIAL LESSONS
+-- =============================================
+
+INSERT INTO tutorial_lessons (slug, title, description, category, difficulty, order_index, content, hints, starter_code, solution_code, test_cases, xp_reward, estimated_minutes) VALUES
+
+-- BASICS
+('hello-world', 'Hello World', 'Learn to output text to the console', 'basics', 'beginner', 1,
+'# Hello World
+
+Welcome to coding! In this first lesson, you''ll learn how to output text.
+
+## What you''ll learn
+- How to print text to the console
+- Basic syntax of your chosen language
+
+## Instructions
+Write a program that outputs: `Hello, World!`
+
+Make sure to match the exact text, including capitalization and punctuation!',
+'["Use the print function", "In Python: print(\"Hello, World!\")", "In JavaScript: console.log(\"Hello, World!\")"]',
+'{"python": "# Write your code here\n", "javascript": "// Write your code here\n"}',
+'{"python": "print(\"Hello, World!\")", "javascript": "console.log(\"Hello, World!\")"}',
+'[{"input": "", "expected_output": "Hello, World!", "points": 100}]',
+10, 5),
+
+('variables', 'Variables', 'Learn how to store and use data', 'basics', 'beginner', 2,
+'# Variables
+
+Variables are containers for storing data values.
+
+## What you''ll learn
+- How to declare variables
+- How to assign values
+- How to use variables in output
+
+## Instructions
+Create a variable called `name` with the value `"CodeComp"`, then print: `Welcome to CodeComp!`',
+'["Declare a variable first", "Use the variable in your print statement", "String concatenation or f-strings work"]',
+'{"python": "# Create a variable and use it\n", "javascript": "// Create a variable and use it\n"}',
+'{"python": "name = \"CodeComp\"\nprint(f\"Welcome to {name}!\")", "javascript": "const name = \"CodeComp\";\nconsole.log(`Welcome to ${name}!`);"}',
+'[{"input": "", "expected_output": "Welcome to CodeComp!", "points": 100}]',
+15, 8),
+
+('input-output', 'Input and Output', 'Learn to read user input', 'basics', 'beginner', 3,
+'# Input and Output
+
+Programs often need to interact with users by reading input and displaying output.
+
+## What you''ll learn
+- How to read input
+- How to process input
+- How to display results
+
+## Instructions
+Read a name from input, then print: `Hello, [name]!`
+
+For example, if input is `Alice`, output should be `Hello, Alice!`',
+'["Read from standard input", "Combine the greeting with the name", "Don''t forget the exclamation mark"]',
+'{"python": "# Read input and greet the user\n", "javascript": "// Read input and greet the user\nconst readline = require(\"readline\");\n"}',
+'{"python": "name = input()\nprint(f\"Hello, {name}!\")", "javascript": "const name = require(\"fs\").readFileSync(0, \"utf-8\").trim();\nconsole.log(`Hello, ${name}!`);"}',
+'[{"input": "Alice", "expected_output": "Hello, Alice!", "points": 50}, {"input": "Bob", "expected_output": "Hello, Bob!", "points": 50}]',
+20, 10),
+
+('conditionals', 'Conditionals', 'Learn to make decisions in code', 'basics', 'beginner', 4,
+'# Conditionals
+
+Conditionals allow your program to make decisions based on conditions.
+
+## What you''ll learn
+- if/else statements
+- Comparison operators
+- Boolean logic
+
+## Instructions
+Read a number. If it''s positive, print `positive`. If it''s negative, print `negative`. If it''s zero, print `zero`.',
+'["Use if-elif-else (Python) or if-else if-else (JS)", "Compare the number to 0", "Remember: 0 is neither positive nor negative"]',
+'{"python": "# Read a number and classify it\n", "javascript": "// Read a number and classify it\n"}',
+'{"python": "n = int(input())\nif n > 0:\n    print(\"positive\")\nelif n < 0:\n    print(\"negative\")\nelse:\n    print(\"zero\")", "javascript": "const n = parseInt(require(\"fs\").readFileSync(0, \"utf-8\").trim());\nif (n > 0) console.log(\"positive\");\nelse if (n < 0) console.log(\"negative\");\nelse console.log(\"zero\");"}',
+'[{"input": "5", "expected_output": "positive", "points": 34}, {"input": "-3", "expected_output": "negative", "points": 33}, {"input": "0", "expected_output": "zero", "points": 33}]',
+25, 12),
+
+('loops', 'Loops', 'Learn to repeat code', 'basics', 'beginner', 5,
+'# Loops
+
+Loops let you repeat code multiple times without writing it over and over.
+
+## What you''ll learn
+- for loops
+- while loops
+- Loop control
+
+## Instructions
+Read a number N, then print numbers from 1 to N, each on a new line.',
+'["Use a for loop", "Range in Python is range(1, n+1)", "In JS, use a standard for loop"]',
+'{"python": "# Print numbers from 1 to N\n", "javascript": "// Print numbers from 1 to N\n"}',
+'{"python": "n = int(input())\nfor i in range(1, n + 1):\n    print(i)", "javascript": "const n = parseInt(require(\"fs\").readFileSync(0, \"utf-8\").trim());\nfor (let i = 1; i <= n; i++) console.log(i);"}',
+'[{"input": "5", "expected_output": "1\n2\n3\n4\n5", "points": 50}, {"input": "3", "expected_output": "1\n2\n3", "points": 50}]',
+25, 12),
+
+-- ARRAYS
+('array-basics', 'Array Basics', 'Learn to work with collections of data', 'arrays', 'beginner', 1,
+'# Arrays
+
+Arrays (or lists) store multiple values in a single variable.
+
+## What you''ll learn
+- Creating arrays
+- Accessing elements
+- Array length
+
+## Instructions
+Read N numbers (first line is N, then N numbers follow). Print them in reverse order, space-separated.',
+'["Read N first, then read N numbers", "Store in an array/list", "Reverse and join with spaces"]',
+'{"python": "# Reverse an array\n", "javascript": "// Reverse an array\n"}',
+'{"python": "n = int(input())\narr = [int(input()) for _ in range(n)]\nprint(\" \".join(map(str, arr[::-1])))", "javascript": "const lines = require(\"fs\").readFileSync(0, \"utf-8\").trim().split(\"\\n\");\nconst n = parseInt(lines[0]);\nconst arr = lines.slice(1, n + 1).map(Number);\nconsole.log(arr.reverse().join(\" \"));"}',
+'[{"input": "5\n1\n2\n3\n4\n5", "expected_output": "5 4 3 2 1", "points": 50}, {"input": "3\n10\n20\n30", "expected_output": "30 20 10", "points": 50}]',
+30, 15),
+
+('array-sum', 'Array Sum', 'Calculate the sum of array elements', 'arrays', 'beginner', 2,
+'# Array Sum
+
+A common operation is summing all elements in an array.
+
+## What you''ll learn
+- Iterating through arrays
+- Accumulating values
+- Built-in sum functions
+
+## Instructions
+Read an array of numbers (first line is N, second line is N space-separated numbers). Print their sum.',
+'["Split the second line by spaces", "Convert to integers", "Use sum() in Python or reduce in JS"]',
+'{"python": "# Sum array elements\n", "javascript": "// Sum array elements\n"}',
+'{"python": "n = int(input())\narr = list(map(int, input().split()))\nprint(sum(arr))", "javascript": "const lines = require(\"fs\").readFileSync(0, \"utf-8\").trim().split(\"\\n\");\nconst arr = lines[1].split(\" \").map(Number);\nconsole.log(arr.reduce((a, b) => a + b, 0));"}',
+'[{"input": "5\n1 2 3 4 5", "expected_output": "15", "points": 50}, {"input": "3\n10 -5 3", "expected_output": "8", "points": 50}]',
+30, 12),
+
+('find-max', 'Find Maximum', 'Find the largest element in an array', 'arrays', 'beginner', 3,
+'# Finding Maximum
+
+Finding the maximum (or minimum) value is a fundamental array operation.
+
+## What you''ll learn
+- Comparing elements
+- Tracking the best value
+- Using built-in functions
+
+## Instructions
+Read an array of numbers and print the maximum value.',
+'["Initialize max with the first element or negative infinity", "Compare each element", "Or use built-in max() function"]',
+'{"python": "# Find the maximum\n", "javascript": "// Find the maximum\n"}',
+'{"python": "n = int(input())\narr = list(map(int, input().split()))\nprint(max(arr))", "javascript": "const lines = require(\"fs\").readFileSync(0, \"utf-8\").trim().split(\"\\n\");\nconst arr = lines[1].split(\" \").map(Number);\nconsole.log(Math.max(...arr));"}',
+'[{"input": "5\n3 1 4 1 5", "expected_output": "5", "points": 50}, {"input": "4\n-5 -2 -10 -1", "expected_output": "-1", "points": 50}]',
+30, 10),
+
+-- STRINGS
+('string-basics', 'String Basics', 'Learn to manipulate text', 'strings', 'beginner', 1,
+'# String Basics
+
+Strings are sequences of characters used to represent text.
+
+## What you''ll learn
+- String length
+- Accessing characters
+- String methods
+
+## Instructions
+Read a string and print its length.',
+'["Use len() in Python", "Use .length in JavaScript", "No need to import anything"]',
+'{"python": "# Print string length\n", "javascript": "// Print string length\n"}',
+'{"python": "s = input()\nprint(len(s))", "javascript": "const s = require(\"fs\").readFileSync(0, \"utf-8\").trim();\nconsole.log(s.length);"}',
+'[{"input": "hello", "expected_output": "5", "points": 50}, {"input": "CodeComp", "expected_output": "8", "points": 50}]',
+20, 8),
+
+('string-reverse', 'Reverse String', 'Reverse a string', 'strings', 'beginner', 2,
+'# Reverse a String
+
+Reversing a string is a classic programming exercise.
+
+## What you''ll learn
+- String slicing
+- Building strings
+- Multiple approaches
+
+## Instructions
+Read a string and print it reversed.',
+'["In Python, use [::-1] slicing", "In JS, split, reverse, and join", "Or use a loop"]',
+'{"python": "# Reverse the string\n", "javascript": "// Reverse the string\n"}',
+'{"python": "s = input()\nprint(s[::-1])", "javascript": "const s = require(\"fs\").readFileSync(0, \"utf-8\").trim();\nconsole.log(s.split(\"\").reverse().join(\"\"));"}',
+'[{"input": "hello", "expected_output": "olleh", "points": 50}, {"input": "CodeComp", "expected_output": "pmoCedoC", "points": 50}]',
+25, 10),
+
+('palindrome', 'Palindrome Check', 'Check if a string is a palindrome', 'strings', 'intermediate', 3,
+'# Palindrome Check
+
+A palindrome reads the same forwards and backwards.
+
+## What you''ll learn
+- String comparison
+- Two-pointer technique
+- Case handling
+
+## Instructions
+Read a string and print `true` if it''s a palindrome (case-insensitive), `false` otherwise. Ignore non-alphanumeric characters.',
+'["Convert to lowercase first", "Remove non-alphanumeric characters", "Compare with its reverse"]',
+'{"python": "# Check palindrome\n", "javascript": "// Check palindrome\n"}',
+'{"python": "import re\ns = input().lower()\ns = re.sub(r\"[^a-z0-9]\", \"\", s)\nprint(\"true\" if s == s[::-1] else \"false\")", "javascript": "const s = require(\"fs\").readFileSync(0, \"utf-8\").trim().toLowerCase().replace(/[^a-z0-9]/g, \"\");\nconsole.log(s === s.split(\"\").reverse().join(\"\") ? \"true\" : \"false\");"}',
+'[{"input": "racecar", "expected_output": "true", "points": 34}, {"input": "hello", "expected_output": "false", "points": 33}, {"input": "A man a plan a canal Panama", "expected_output": "true", "points": 33}]',
+35, 15),
+
+-- ALGORITHMS
+('binary-search', 'Binary Search', 'Efficiently search sorted data', 'algorithms', 'intermediate', 1,
+'# Binary Search
+
+Binary search finds elements in O(log n) time by repeatedly dividing the search space in half.
+
+## What you''ll learn
+- Divide and conquer
+- O(log n) complexity
+- Search algorithms
+
+## Instructions
+Given a sorted array and a target, return the index of the target or -1 if not found.',
+'["Compare target with middle element", "If target is smaller, search left half", "If target is larger, search right half"]',
+'{"python": "# Binary search implementation\n", "javascript": "// Binary search implementation\n"}',
+'{"python": "def binary_search(arr, target):\n    left, right = 0, len(arr) - 1\n    while left <= right:\n        mid = (left + right) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            left = mid + 1\n        else:\n            right = mid - 1\n    return -1\n\nline1 = input().strip()\narr = list(map(int, line1[1:-1].split(\",\"))) if line1 != \"[]\" else []\ntarget = int(input())\nprint(binary_search(arr, target))", "javascript": "function binarySearch(arr, target) {\n    let left = 0, right = arr.length - 1;\n    while (left <= right) {\n        const mid = Math.floor((left + right) / 2);\n        if (arr[mid] === target) return mid;\n        if (arr[mid] < target) left = mid + 1;\n        else right = mid - 1;\n    }\n    return -1;\n}\nconst lines = require(\"fs\").readFileSync(0, \"utf-8\").trim().split(\"\\n\");\nconst arr = JSON.parse(lines[0]);\nconst target = parseInt(lines[1]);\nconsole.log(binarySearch(arr, target));"}',
+'[{"input": "[1,2,3,4,5,6,7]\n4", "expected_output": "3", "points": 34}, {"input": "[1,3,5,7,9]\n6", "expected_output": "-1", "points": 33}, {"input": "[1]\n1", "expected_output": "0", "points": 33}]',
+50, 20),
+
+('two-pointers', 'Two Pointers', 'Solve problems with two moving pointers', 'algorithms', 'intermediate', 2,
+'# Two Pointers Technique
+
+The two-pointer technique uses two indices to traverse data efficiently.
+
+## What you''ll learn
+- Two-pointer pattern
+- O(n) solutions
+- Array manipulation
+
+## Instructions
+Given a sorted array, find two numbers that sum to a target. Return their indices (1-indexed).',
+'["Start with pointers at both ends", "If sum is too small, move left pointer right", "If sum is too large, move right pointer left"]',
+'{"python": "# Two pointer solution\n", "javascript": "// Two pointer solution\n"}',
+'{"python": "def two_sum(arr, target):\n    left, right = 0, len(arr) - 1\n    while left < right:\n        s = arr[left] + arr[right]\n        if s == target:\n            return [left + 1, right + 1]\n        elif s < target:\n            left += 1\n        else:\n            right -= 1\n    return [-1, -1]\n\nline1 = input().strip()\narr = list(map(int, line1[1:-1].split(\",\"))) if line1 != \"[]\" else []\ntarget = int(input())\nprint(two_sum(arr, target))", "javascript": "const lines = require(\"fs\").readFileSync(0, \"utf-8\").trim().split(\"\\n\");\nconst arr = JSON.parse(lines[0]);\nconst target = parseInt(lines[1]);\nlet l = 0, r = arr.length - 1;\nwhile (l < r) {\n    const s = arr[l] + arr[r];\n    if (s === target) { console.log([l + 1, r + 1]); process.exit(); }\n    if (s < target) l++; else r--;\n}\nconsole.log([-1, -1]);"}',
+'[{"input": "[2,7,11,15]\n9", "expected_output": "[1, 2]", "points": 50}, {"input": "[2,3,4]\n6", "expected_output": "[1, 3]", "points": 50}]',
+50, 18)
+
+ON CONFLICT (slug) DO NOTHING;
+
+-- =============================================
+-- HELPER FUNCTIONS
+-- =============================================
+
+-- Create notification
+CREATE OR REPLACE FUNCTION create_notification(
+  p_user_id VARCHAR(255),
+  p_type VARCHAR(50),
+  p_title VARCHAR(255),
+  p_message TEXT DEFAULT NULL,
+  p_data JSONB DEFAULT '{}'
+)
+RETURNS UUID AS $$
+DECLARE
+  v_notification_id UUID;
+BEGIN
+  INSERT INTO notifications (user_id, type, title, message, data)
+  VALUES (p_user_id, p_type, p_title, p_message, p_data)
+  RETURNING id INTO v_notification_id;
+  
+  RETURN v_notification_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get friend count
+CREATE OR REPLACE FUNCTION get_friend_count(p_user_id VARCHAR(255))
+RETURNS INTEGER AS $$
+BEGIN
+  RETURN (
+    SELECT COUNT(*)
+    FROM friendships
+    WHERE (user_id = p_user_id OR friend_id = p_user_id)
+    AND status = 'accepted'
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Update user presence
+CREATE OR REPLACE FUNCTION update_presence(
+  p_user_id VARCHAR(255),
+  p_is_online BOOLEAN DEFAULT TRUE,
+  p_activity VARCHAR(100) DEFAULT 'browsing',
+  p_details JSONB DEFAULT '{}'
+)
+RETURNS VOID AS $$
+BEGIN
+  INSERT INTO user_presence (user_id, is_online, last_seen, current_activity, activity_details)
+  VALUES (p_user_id, p_is_online, NOW(), p_activity, p_details)
+  ON CONFLICT (user_id) DO UPDATE SET
+    is_online = p_is_online,
+    last_seen = NOW(),
+    current_activity = p_activity,
+    activity_details = p_details;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =============================================
+-- USER PROFILE CUSTOMIZATION
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id VARCHAR(255) NOT NULL UNIQUE,
+  bio TEXT,
+  location VARCHAR(255),
+  website VARCHAR(500),
+  github_username VARCHAR(100),
+  twitter_username VARCHAR(100),
+  linkedin_url VARCHAR(500),
+  preferred_language VARCHAR(50) DEFAULT 'python',
+  theme VARCHAR(20) DEFAULT 'system',
+  email_public BOOLEAN DEFAULT FALSE,
+  show_activity BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
+
+-- =============================================
+-- CODE PLAYGROUND
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS playground_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id VARCHAR(255),
+  title VARCHAR(255) DEFAULT 'Untitled',
+  code TEXT NOT NULL,
+  language VARCHAR(50) NOT NULL DEFAULT 'python',
+  input TEXT DEFAULT '',
+  last_output TEXT,
+  is_public BOOLEAN DEFAULT FALSE,
+  share_slug VARCHAR(20) UNIQUE,
+  fork_count INTEGER DEFAULT 0,
+  forked_from UUID REFERENCES playground_sessions(id),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_playground_user ON playground_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_playground_public ON playground_sessions(is_public);
+CREATE INDEX IF NOT EXISTS idx_playground_share_slug ON playground_sessions(share_slug);
+
+-- =============================================
+-- PRACTICE MODE
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS practice_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id VARCHAR(255) NOT NULL,
+  challenge_type VARCHAR(50) NOT NULL, -- 'duel_challenge', 'daily_challenge', 'competition'
+  challenge_id UUID NOT NULL,
+  original_duel_id UUID, -- If practicing from a past duel
+  code TEXT,
+  language VARCHAR(50) NOT NULL,
+  score INTEGER DEFAULT 0,
+  tests_passed INTEGER DEFAULT 0,
+  tests_total INTEGER DEFAULT 0,
+  attempts INTEGER DEFAULT 1,
+  best_score INTEGER DEFAULT 0,
+  completed BOOLEAN DEFAULT FALSE,
+  started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  completed_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_practice_user ON practice_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_practice_challenge ON practice_sessions(challenge_type, challenge_id);
+
+-- =============================================
+-- COMPETITION & ARENA INVITES
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS competition_invites (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  competition_id UUID REFERENCES competitions(id) ON DELETE CASCADE,
+  invite_code VARCHAR(20) NOT NULL UNIQUE,
+  created_by VARCHAR(255) NOT NULL,
+  max_uses INTEGER DEFAULT NULL, -- NULL = unlimited
+  uses_count INTEGER DEFAULT 0,
+  expires_at TIMESTAMP WITH TIME ZONE,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS arena_invites (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  arena_id UUID REFERENCES arenas(id) ON DELETE CASCADE,
+  invite_code VARCHAR(20) NOT NULL UNIQUE,
+  created_by VARCHAR(255) NOT NULL,
+  max_uses INTEGER DEFAULT NULL,
+  uses_count INTEGER DEFAULT 0,
+  expires_at TIMESTAMP WITH TIME ZONE,
+  is_active BOOLEAN DEFAULT TRUE,
+  role VARCHAR(50) DEFAULT 'participant', -- 'participant' or 'judge'
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS invite_redemptions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  invite_type VARCHAR(20) NOT NULL, -- 'competition' or 'arena'
+  invite_id UUID NOT NULL,
+  user_id VARCHAR(255) NOT NULL,
+  redeemed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(invite_type, invite_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comp_invites_code ON competition_invites(invite_code);
+CREATE INDEX IF NOT EXISTS idx_arena_invites_code ON arena_invites(invite_code);
+CREATE INDEX IF NOT EXISTS idx_invite_redemptions_user ON invite_redemptions(user_id);
+
+-- =============================================
+-- CODE DIFF / SUBMISSION COMPARISON
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS submission_comparisons (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id VARCHAR(255) NOT NULL,
+  submission_a_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+  submission_b_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+  notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_comparisons_user ON submission_comparisons(user_id);
+
+-- =============================================
+-- REALTIME DUEL STATE (for Supabase Realtime)
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS duel_realtime_state (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  duel_id UUID NOT NULL REFERENCES duels(id) ON DELETE CASCADE UNIQUE,
+  player1_typing BOOLEAN DEFAULT FALSE,
+  player1_last_run TIMESTAMP WITH TIME ZONE,
+  player1_tests_passing INTEGER DEFAULT 0,
+  player2_typing BOOLEAN DEFAULT FALSE,
+  player2_last_run TIMESTAMP WITH TIME ZONE,
+  player2_tests_passing INTEGER DEFAULT 0,
+  current_phase VARCHAR(50) DEFAULT 'coding', -- 'coding', 'submitted', 'finished'
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_duel_realtime_duel ON duel_realtime_state(duel_id);
+
+-- Enable realtime for duel state
+-- Run: ALTER PUBLICATION supabase_realtime ADD TABLE duel_realtime_state;
+
+-- =============================================
+-- CODE TEMPLATES (enhanced)
+-- =============================================
+
+-- Add category and tags to existing templates table if not exists
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                 WHERE table_name = 'code_templates' AND column_name = 'category') THEN
+    ALTER TABLE code_templates ADD COLUMN category VARCHAR(100);
+  END IF;
+  
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                 WHERE table_name = 'code_templates' AND column_name = 'tags') THEN
+    ALTER TABLE code_templates ADD COLUMN tags TEXT[] DEFAULT '{}';
+  END IF;
+  
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                 WHERE table_name = 'code_templates' AND column_name = 'use_count') THEN
+    ALTER TABLE code_templates ADD COLUMN use_count INTEGER DEFAULT 0;
+  END IF;
+  
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                 WHERE table_name = 'code_templates' AND column_name = 'is_starter') THEN
+    ALTER TABLE code_templates ADD COLUMN is_starter BOOLEAN DEFAULT FALSE;
+  END IF;
+END $$;
+
+-- Seed some starter templates
+INSERT INTO code_templates (user_id, name, description, code, language, is_public, category, tags, is_starter)
+VALUES
+-- Python templates
+('system', 'Python - Fast I/O', 'Optimized input/output for competitive programming', 
+'import sys
+input = sys.stdin.readline
+
+def solve():
+    n = int(input())
+    arr = list(map(int, input().split()))
+    # Your solution here
+    print(result)
+
+solve()', 'python', TRUE, 'competitive', ARRAY['io', 'optimization'], TRUE),
+
+('system', 'Python - BFS Template', 'Breadth-first search template',
+'from collections import deque
+
+def bfs(graph, start):
+    visited = set([start])
+    queue = deque([start])
+    
+    while queue:
+        node = queue.popleft()
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                visited.add(neighbor)
+                queue.append(neighbor)
+    
+    return visited', 'python', TRUE, 'algorithms', ARRAY['bfs', 'graph'], TRUE),
+
+('system', 'Python - DFS Template', 'Depth-first search template',
+'def dfs(graph, node, visited=None):
+    if visited is None:
+        visited = set()
+    
+    visited.add(node)
+    
+    for neighbor in graph[node]:
+        if neighbor not in visited:
+            dfs(graph, neighbor, visited)
+    
+    return visited', 'python', TRUE, 'algorithms', ARRAY['dfs', 'graph', 'recursion'], TRUE),
+
+('system', 'Python - Binary Search', 'Binary search template',
+'def binary_search(arr, target):
+    left, right = 0, len(arr) - 1
+    
+    while left <= right:
+        mid = (left + right) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+    
+    return -1  # Not found
+
+# For finding insertion point:
+# import bisect
+# bisect.bisect_left(arr, target)', 'python', TRUE, 'algorithms', ARRAY['binary-search', 'search'], TRUE),
+
+-- JavaScript templates
+('system', 'JavaScript - Fast I/O', 'Optimized input for competitive programming',
+'const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin });
+const lines = [];
+
+rl.on("line", (line) => lines.push(line));
+rl.on("close", () => {
+    let idx = 0;
+    const read = () => lines[idx++];
+    
+    // Your solution here
+    const n = parseInt(read());
+    const arr = read().split(" ").map(Number);
+    
+    console.log(result);
+});', 'javascript', TRUE, 'competitive', ARRAY['io', 'optimization'], TRUE),
+
+('system', 'JavaScript - Graph BFS', 'BFS template for JavaScript',
+'function bfs(graph, start) {
+    const visited = new Set([start]);
+    const queue = [start];
+    
+    while (queue.length > 0) {
+        const node = queue.shift();
+        for (const neighbor of graph[node] || []) {
+            if (!visited.has(neighbor)) {
+                visited.add(neighbor);
+                queue.push(neighbor);
+            }
+        }
+    }
+    
+    return visited;
+}', 'javascript', TRUE, 'algorithms', ARRAY['bfs', 'graph'], TRUE)
+
+ON CONFLICT DO NOTHING;
+
+-- =============================================
+-- GENERATE INVITE CODE FUNCTION
+-- =============================================
+
+CREATE OR REPLACE FUNCTION generate_invite_code()
+RETURNS VARCHAR(20) AS $$
+DECLARE
+  chars TEXT := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  result VARCHAR(20) := '';
+  i INTEGER;
+BEGIN
+  FOR i IN 1..8 LOOP
+    result := result || substr(chars, floor(random() * length(chars) + 1)::integer, 1);
+  END LOOP;
+  RETURN result;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =============================================
+-- CREATE COMPETITION INVITE FUNCTION
+-- =============================================
+
+CREATE OR REPLACE FUNCTION create_competition_invite(
+  p_competition_id UUID,
+  p_user_id VARCHAR(255),
+  p_max_uses INTEGER DEFAULT NULL,
+  p_expires_in_days INTEGER DEFAULT 7
+)
+RETURNS competition_invites AS $$
+DECLARE
+  v_invite competition_invites;
+  v_code VARCHAR(20);
+BEGIN
+  -- Generate unique code
+  LOOP
+    v_code := generate_invite_code();
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM competition_invites WHERE invite_code = v_code);
+  END LOOP;
+  
+  INSERT INTO competition_invites (competition_id, invite_code, created_by, max_uses, expires_at)
+  VALUES (
+    p_competition_id, 
+    v_code, 
+    p_user_id, 
+    p_max_uses,
+    CASE WHEN p_expires_in_days IS NOT NULL 
+         THEN NOW() + (p_expires_in_days || ' days')::interval 
+         ELSE NULL END
+  )
+  RETURNING * INTO v_invite;
+  
+  RETURN v_invite;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =============================================
+-- CREATE ARENA INVITE FUNCTION
+-- =============================================
+
+CREATE OR REPLACE FUNCTION create_arena_invite(
+  p_arena_id UUID,
+  p_user_id VARCHAR(255),
+  p_role VARCHAR(50) DEFAULT 'participant',
+  p_max_uses INTEGER DEFAULT NULL,
+  p_expires_in_days INTEGER DEFAULT 7
+)
+RETURNS arena_invites AS $$
+DECLARE
+  v_invite arena_invites;
+  v_code VARCHAR(20);
+BEGIN
+  LOOP
+    v_code := generate_invite_code();
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM arena_invites WHERE invite_code = v_code);
+  END LOOP;
+  
+  INSERT INTO arena_invites (arena_id, invite_code, created_by, role, max_uses, expires_at)
+  VALUES (
+    p_arena_id, 
+    v_code, 
+    p_user_id, 
+    p_role,
+    p_max_uses,
+    CASE WHEN p_expires_in_days IS NOT NULL 
+         THEN NOW() + (p_expires_in_days || ' days')::interval 
+         ELSE NULL END
+  )
+  RETURNING * INTO v_invite;
+  
+  RETURN v_invite;
 END;
 $$ LANGUAGE plpgsql;

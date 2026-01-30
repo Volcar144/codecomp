@@ -3,7 +3,8 @@
 import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Code2, FileText, Loader2 } from "lucide-react";
+import { Code2, FileText, Loader2, Crown, Lock } from "lucide-react";
+import { useSession, subscription } from "@/lib/auth-client";
 
 interface Template {
   id: string;
@@ -19,6 +20,11 @@ interface Template {
     points: number;
     is_hidden: boolean;
   }>;
+}
+
+interface SubscriptionData {
+  plan: string;
+  status: string;
 }
 
 const LANGUAGES = [
@@ -61,12 +67,14 @@ function CreateCompetitionContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const templateId = searchParams.get("template");
+  const { data: session } = useSession();
   
   const [loading, setLoading] = useState(false);
   const [loadingTemplate, setLoadingTemplate] = useState(!!templateId);
   const [error, setError] = useState("");
   const [templateName, setTemplateName] = useState<string | null>(null);
   const [templateTestCases, setTemplateTestCases] = useState<Template["test_cases"]>([]);
+  const [userPlan, setUserPlan] = useState<string>("free");
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -78,6 +86,31 @@ function CreateCompetitionContent() {
     min_skill_rating: "",
     recommended_skill_tier: "",
   });
+
+  // Check user's subscription plan
+  useEffect(() => {
+    const checkSubscription = async () => {
+      try {
+        const { data } = await subscription.list();
+        if (data && data.length > 0) {
+          const active = data.find(
+            (sub: SubscriptionData) => sub.status === 'active' || sub.status === 'trialing'
+          );
+          if (active) {
+            setUserPlan(active.plan);
+          }
+        }
+      } catch {
+        // Default to free if can't check
+      }
+    };
+    
+    if (session?.user) {
+      checkSubscription();
+    }
+  }, [session]);
+
+  const isPaidPlan = userPlan === 'pro' || userPlan === 'family' || userPlan === 'team';
 
   // Load template if templateId is provided
   useEffect(() => {
@@ -400,17 +433,39 @@ function CreateCompetitionContent() {
                     <p className="text-xs text-gray-500 dark:text-gray-400">Anyone can discover and join</p>
                   </div>
                 </label>
-                <label className="flex items-center gap-2 cursor-pointer p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                <label 
+                  className={`flex items-center gap-2 p-3 border rounded-lg transition-colors relative ${
+                    isPaidPlan 
+                      ? "cursor-pointer border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700" 
+                      : "cursor-not-allowed border-gray-200 dark:border-gray-700 opacity-60"
+                  }`}
+                  onClick={(e) => {
+                    if (!isPaidPlan) {
+                      e.preventDefault();
+                      router.push('/pricing?feature=private-competitions');
+                    }
+                  }}
+                >
                   <input
                     type="radio"
                     name="visibility"
                     checked={!formData.is_public}
-                    onChange={() => setFormData({ ...formData, is_public: false })}
+                    onChange={() => isPaidPlan && setFormData({ ...formData, is_public: false })}
+                    disabled={!isPaidPlan}
                     className="w-4 h-4 text-blue-600"
                   />
                   <div>
-                    <span className="font-medium">Private</span>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Only you can see it</p>
+                    <span className="font-medium flex items-center gap-1.5">
+                      Private
+                      {!isPaidPlan && <Lock className="w-3.5 h-3.5 text-gray-400" />}
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gradient-to-r from-blue-500 to-purple-500 text-white text-[10px] font-bold rounded">
+                        <Crown className="w-3 h-3" />
+                        PRO
+                      </span>
+                    </span>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {isPaidPlan ? "Invite-only with unique code" : "Upgrade to Pro to create private competitions"}
+                    </p>
                   </div>
                 </label>
               </div>

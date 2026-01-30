@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "@/lib/auth-client";
+import Navbar from "@/components/layout/Navbar";
 
 interface SkillRating {
   user_id: string;
@@ -105,8 +106,11 @@ export default function SkillLeaderboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-6xl mx-auto px-4">
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      
+      <div className="py-8">
+        <div className="max-w-6xl mx-auto px-4">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Skill Leaderboard</h1>
@@ -326,6 +330,7 @@ export default function SkillLeaderboardPage() {
             Back to Dashboard
           </Link>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Code2, Trophy, FileText, Clock, User } from "lucide-react";
+import { Trophy, FileText, Clock } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
+import Navbar from "@/components/layout/Navbar";
 
 interface Competition {
   id: string;
@@ -79,35 +80,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
-      <header className="border-b bg-white dark:bg-gray-900">
-        <nav className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Code2 className="h-8 w-8 text-blue-600" />
-            <span className="text-2xl font-bold">CodeComp</span>
-          </Link>
-          <div className="flex gap-4 items-center">
-            <Link
-              href="/competitions"
-              className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
-            >
-              Competitions
-            </Link>
-            <Link
-              href="/profile"
-              className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 flex items-center gap-1"
-            >
-              <User className="h-4 w-4" />
-              Profile
-            </Link>
-            <Link
-              href="/competitions/create"
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              Create Competition
-            </Link>
-          </div>
-        </nav>
-      </header>
+      <Navbar />
 
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">

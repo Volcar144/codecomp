@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "@/lib/auth-client";
 import { Loading } from "@/components/ui/Loading";
+import Navbar from "@/components/layout/Navbar";
 import { 
-  Code2, Users, Building2, GraduationCap, Briefcase, Globe,
+  Users, Building2, GraduationCap, Briefcase, Globe,
   Plus, Search, Star, Trophy, ChevronRight
 } from "lucide-react";
 
@@ -82,25 +83,7 @@ export default function OrganizationsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
-      <header className="border-b bg-white dark:bg-gray-900">
-        <nav className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Code2 className="h-8 w-8 text-blue-600" />
-            <span className="text-2xl font-bold">CodeComp</span>
-          </Link>
-          <div className="flex gap-4">
-            <Link href="/competitions" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900">
-              Competitions
-            </Link>
-            <Link href="/duels" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900">
-              Duels
-            </Link>
-            <Link href="/profile" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900">
-              Profile
-            </Link>
-          </div>
-        </nav>
-      </header>
+      <Navbar />
 
       <main className="container mx-auto px-4 py-8">
         {/* Header */}

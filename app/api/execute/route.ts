@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { isLanguageSupported } from "@/lib/code-execution";
 import { executeCodeRateLimited, getRateLimitStatus } from "@/lib/rate-limited-execution";
 import { supabase } from "@/lib/supabase";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
+import { 
+  canExecuteCode, 
+  logExecution, 
+  getExecutionTimeout,
+  hasPriorityQueue,
+  DISABLE_PAYMENT_GATING,
+  PLAN_LIMITS
+} from "@/lib/subscription-utils";
 
 // Default test cases if none are found in database
 // These are simple echo-style tests for basic validation
@@ -24,6 +34,32 @@ export async function POST(request: NextRequest) {
     // Validate language is supported
     if (!isLanguageSupported(language)) {
       return NextResponse.json({ error: `Unsupported language: ${language}` }, { status: 400 });
+    }
+
+    // Get user session for subscription check
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+
+    const userId = session?.user?.id;
+    
+    // Check execution limits (only for authenticated users with daily limits)
+    if (userId && !DISABLE_PAYMENT_GATING) {
+      const executionCheck = await canExecuteCode(userId);
+      
+      if (!executionCheck.allowed) {
+        return NextResponse.json({
+          error: "Daily execution limit reached",
+          message: `You've used all ${executionCheck.limit} executions for today. Upgrade to Pro for unlimited executions.`,
+          limit: executionCheck.limit,
+          remaining: 0,
+          plan: executionCheck.plan,
+          upgradeUrl: "/pricing",
+        }, { status: 429 });
+      }
+      
+      // Log this execution
+      await logExecution(userId);
     }
 
     // Get test cases for the competition from database
@@ -51,11 +87,27 @@ export async function POST(request: NextRequest) {
       ? testCases.filter((tc) => !tc.isHidden) 
       : testCases;
 
+    // Get timeout based on user's plan
+    const timeoutSeconds = userId 
+      ? await getExecutionTimeout(userId) 
+      : PLAN_LIMITS.free.executionTimeoutSeconds;
+
+    // Check if user has priority queue access (Pro/Family/Team)
+    const usePriorityQueue = userId 
+      ? await hasPriorityQueue(userId)
+      : false;
+
     // Run code against test cases (with rate limiting)
     const results = await Promise.all(
       casesToRun.map(async (testCase) => {
         try {
-          const result = await executeCodeRateLimited(code, language, testCase.input);
+          const result = await executeCodeRateLimited(
+            code, 
+            language, 
+            testCase.input, 
+            timeoutSeconds,
+            usePriorityQueue // Use priority queue for Pro users
+          );
           
           // Check if execution had an error
           if (result.error) {
@@ -99,11 +151,23 @@ export async function POST(request: NextRequest) {
     const totalTests = results.length;
     const score = Math.floor((passedTests / totalTests) * 100);
 
+    // Get remaining executions to return to client
+    let executionInfo = null;
+    if (userId && !DISABLE_PAYMENT_GATING) {
+      const check = await canExecuteCode(userId);
+      executionInfo = {
+        remaining: check.remaining,
+        limit: check.limit,
+        plan: check.plan,
+      };
+    }
+
     return NextResponse.json({
       results,
       score,
       passedTests,
       totalTests,
+      executionInfo,
     });
   } catch (error) {
     console.error("Error executing code:", error);
@@ -112,12 +176,33 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * GET endpoint to check rate limit status
+ * GET endpoint to check rate limit status and user's execution limits
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const status = await getRateLimitStatus();
-    return NextResponse.json(status);
+    
+    // Also check user's subscription limits
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+
+    let userLimits = null;
+    if (session?.user?.id) {
+      const check = await canExecuteCode(session.user.id);
+      userLimits = {
+        remaining: check.remaining,
+        limit: check.limit,
+        plan: check.plan,
+        unlimited: check.limit === Infinity,
+      };
+    }
+
+    return NextResponse.json({ 
+      ...status,
+      userLimits,
+      paymentGatingDisabled: DISABLE_PAYMENT_GATING,
+    });
   } catch (error) {
     console.error("Error getting rate limit status:", error);
     return NextResponse.json({ error: "Failed to get rate limit status" }, { status: 500 });

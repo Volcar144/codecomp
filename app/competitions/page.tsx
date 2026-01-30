@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
-import { Code2, Calendar, Users, Search, Filter, Loader2, RefreshCw, AlertCircle, Lock, Globe, Swords, SortAsc, SortDesc, X, Code, ChevronDown } from "lucide-react";
+import { Calendar, Users, Search, Filter, Loader2, RefreshCw, AlertCircle, Lock, Globe, Swords, SortAsc, SortDesc, X, Code, ChevronDown, Code2 } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
+import Navbar from "@/components/layout/Navbar";
 
 // All supported languages for filtering
 const ALL_LANGUAGES = [
@@ -240,46 +241,7 @@ export default function CompetitionsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
-      {/* Header */}
-      <header className="border-b bg-white dark:bg-gray-900">
-        <nav className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Code2 className="h-8 w-8 text-blue-600" />
-            <span className="text-2xl font-bold">CodeComp</span>
-          </Link>
-          <div className="flex gap-4">
-            <Link
-              href="/dashboard"
-              className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
-            >
-              Dashboard
-            </Link>
-            {session ? (
-              <div className="flex gap-2">
-                <Link
-                  href="/competitions/create"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                >
-                  Create Competition
-                </Link>
-                <Link
-                  href="/arenas/create"
-                  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
-                >
-                  Create Arena
-                </Link>
-              </div>
-            ) : (
-              <Link
-                href="/login?redirect=/competitions/create"
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Sign In to Create
-              </Link>
-            )}
-          </div>
-        </nav>
-      </header>
+      <Navbar />
 
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">

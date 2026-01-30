@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import crypto from "crypto";
 import { getPostHogClient } from "@/lib/posthog-server";
+import { canCreatePrivateCompetition, getUserPlan, DISABLE_PAYMENT_GATING } from "@/lib/subscription-utils";
 
 // Generate a unique invite code
 function generateInviteCode(): string {
@@ -42,6 +43,21 @@ export async function POST(request: NextRequest) {
     }
     if (!Array.isArray(allowed_languages) || allowed_languages.length === 0) {
       return NextResponse.json({ error: "At least one programming language must be selected" }, { status: 400 });
+    }
+
+    // Check if user can create private competitions (Pro feature)
+    if (is_public === false && !DISABLE_PAYMENT_GATING) {
+      const canCreatePrivate = await canCreatePrivateCompetition(session.user.id);
+      if (!canCreatePrivate) {
+        const currentPlan = await getUserPlan(session.user.id);
+        return NextResponse.json({ 
+          error: "Private competitions require a Pro subscription",
+          message: "Upgrade to Pro to create private competitions with invite codes.",
+          currentPlan,
+          requiredPlan: "pro",
+          upgradeUrl: "/pricing",
+        }, { status: 403 });
+      }
     }
 
     const { data, error } = await supabase

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "@/lib/auth-client";
 import { Loading } from "@/components/ui/Loading";
+import Navbar from "@/components/layout/Navbar";
 import { 
   Code2, Trophy, Clock, Target, Star, Calendar, TrendingUp, Award, 
   Swords, Flame, Medal, Users, Zap, Crown, ChevronRight 
@@ -113,6 +114,17 @@ function getTierInfo(rating: number) {
   return SKILL_TIERS.find(t => rating >= t.min && rating <= t.max) || SKILL_TIERS[0];
 }
 
+function getEmailHash(email: string): string {
+  // Simple hash for Gravatar - in production use crypto.createHash('md5')
+  let hash = 0;
+  for (let i = 0; i < email.length; i++) {
+    const char = email.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(16).padStart(32, '0');
+}
+
 export default function ProfilePage() {
   const { data: session, isPending } = useSession();
   const [stats, setStats] = useState<UserStats | null>(null);
@@ -169,35 +181,25 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
-      <header className="border-b bg-white dark:bg-gray-900">
-        <nav className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Code2 className="h-8 w-8 text-blue-600" />
-            <span className="text-2xl font-bold">CodeComp</span>
-          </Link>
-          <div className="flex gap-4">
-            <Link href="/competitions" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">
-              Competitions
-            </Link>
-            <Link href="/duels" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">
-              Duels
-            </Link>
-            <Link href="/daily" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">
-              Daily
-            </Link>
-            <Link href="/dashboard" className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">
-              Dashboard
-            </Link>
-          </div>
-        </nav>
-      </header>
+      <Navbar />
 
       <main className="container mx-auto px-4 py-8">
         {/* Profile Header with Skill */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8">
           <div className="flex flex-col md:flex-row items-start md:items-center gap-6">
-            <div className="w-24 h-24 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full flex items-center justify-center text-white text-4xl font-bold shadow-lg">
-              {session.user.name?.[0]?.toUpperCase() || session.user.email?.[0]?.toUpperCase() || "U"}
+            <div className="relative">
+              <img
+                src={session.user.image || `https://www.gravatar.com/avatar/${getEmailHash(session.user.email || "")}?s=96&d=identicon`}
+                alt="Avatar"
+                className="w-24 h-24 rounded-full shadow-lg object-cover"
+              />
+              <Link
+                href="/profile/edit"
+                className="absolute -bottom-1 -right-1 w-8 h-8 bg-green-600 hover:bg-green-700 rounded-full flex items-center justify-center text-white text-sm shadow-lg"
+                title="Edit Profile"
+              >
+                ✎
+              </Link>
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-3 mb-2">

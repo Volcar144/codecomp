@@ -306,34 +306,101 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
 }
 
+// Calculate when bot should submit based on difficulty and skill
+function calculateBotSubmissionDelay(
+  botRating: number,
+  playerTime: number,
+  playerScore: number,
+  maxScore: number
+): number {
+  // Bot skill level (0.4 to 1.0)
+  const botSkill = Math.min(1, Math.max(0.4, botRating / 2000));
+  
+  // Base time: faster bots (higher rating) solve quicker
+  // Skilled bot: 30-90 seconds
+  // Less skilled bot: 90-240 seconds
+  const minTime = Math.floor(30 / botSkill);
+  const maxTime = Math.floor(180 / botSkill);
+  let baseTime = minTime + Math.random() * (maxTime - minTime);
+  
+  // Competitive adjustment: bot tries to beat player's time
+  // Higher rated bots are more likely to beat player time
+  if (Math.random() < botSkill * 0.7) {
+    // Bot tries to beat player time
+    const targetTime = playerTime * (0.6 + Math.random() * 0.4);
+    baseTime = Math.min(baseTime, Math.max(20, targetTime));
+  }
+  
+  // Add some randomness for realistic feel (+/- 20%)
+  const variance = 0.8 + Math.random() * 0.4;
+  const finalTime = Math.floor(baseTime * variance);
+  
+  // Minimum 15 seconds, max 5 minutes
+  return Math.max(15, Math.min(300, finalTime));
+}
+
 // Simulate bot submission based on difficulty
 async function simulateBotSubmission(
   duelId: string,
-  duel: { player2_rating?: number | null; challenge?: { test_cases?: Array<{ points: number }> } | null },
+  duel: { 
+    player2_rating?: number | null; 
+    challenge?: { 
+      test_cases?: Array<{ points: number }>;
+      difficulty?: string;
+    } | null;
+    started_at?: string | null;
+  },
   playerScore: number,
   playerTime: number
 ) {
   const botRating = duel.player2_rating || 1200;
   const testCases = duel.challenge?.test_cases || [];
+  const difficulty = duel.challenge?.difficulty || 'medium';
   const maxScore = testCases.reduce((sum: number, tc: { points: number }) => sum + (tc.points || 25), 0);
 
   // Bot performance based on rating
   // Higher rated bots solve faster and get higher scores
-  const botSkill = Math.min(1, botRating / 2000);
+  const botSkill = Math.min(1, Math.max(0.4, botRating / 2000));
   
-  // Randomize bot performance a bit
-  const performanceVariance = 0.7 + Math.random() * 0.3;
+  // Difficulty modifier affects bot success rate
+  const difficultyModifier: Record<string, number> = {
+    'easy': 0.9,
+    'medium': 0.75,
+    'hard': 0.6,
+    'expert': 0.45,
+  };
+  const diffMod = difficultyModifier[difficulty] || 0.75;
+  
+  // Randomize bot performance with more variance for lower skill
+  const performanceVariance = (0.6 + Math.random() * 0.4) * diffMod;
   const botScorePercent = botSkill * performanceVariance;
-  const botScore = Math.floor(maxScore * botScorePercent);
   
-  // Bot time is inversely related to skill
-  const baseTime = 60 + Math.random() * 120; // 60-180 seconds base
-  const botTime = Math.floor(baseTime / botSkill);
+  // Sometimes bot makes mistakes (lower chance for high skill)
+  const mistakeChance = 0.15 * (1 - botSkill);
+  const botScore = Math.random() < mistakeChance 
+    ? Math.floor(maxScore * botScorePercent * 0.5) // Partial score on mistake
+    : Math.floor(maxScore * botScorePercent);
+  
+  // Calculate realistic bot submission time
+  const botTime = calculateBotSubmissionDelay(botRating, playerTime, playerScore, maxScore);
+  
+  // Calculate when the bot's submission timestamp should be
+  // (relative to duel start, not current time)
+  const duelStartTime = duel.started_at ? new Date(duel.started_at).getTime() : Date.now() - playerTime * 1000;
+  const botSubmittedAt = new Date(duelStartTime + botTime * 1000);
+  
+  // If bot time would be in the future, we still record it but the
+  // client will see the bot hasn't submitted yet
+  // This creates more suspense!
+  const now = new Date();
+  const botSubmissionTimestamp = botSubmittedAt > now 
+    ? new Date(now.getTime() + Math.random() * 5000) // Submit within 5 seconds if would be future
+    : botSubmittedAt;
 
   await supabase.from("duels").update({
     player2_score: botScore,
     player2_time: botTime,
-    player2_submitted_at: new Date().toISOString(),
+    player2_submitted_at: botSubmissionTimestamp.toISOString(),
   }).eq("id", duelId);
 }
 

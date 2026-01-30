@@ -6,6 +6,10 @@
  * 
  * When rate limit is exceeded, requests are queued in Redis and processed
  * in order as capacity becomes available.
+ * 
+ * PRIORITY QUEUE:
+ * Pro/Family/Team users have access to a priority queue that is processed
+ * before the regular queue. This ensures paid users get faster execution times.
  */
 
 import { getRedisClient, isRedisAvailable, REDIS_KEYS } from "./redis";
@@ -15,8 +19,13 @@ import { executeCode as directExecuteCode, ExecutionResult } from "./code-execut
 const RATE_LIMIT = 5; // requests per second
 const WINDOW_SIZE_MS = 1000; // 1 second window
 const MAX_QUEUE_SIZE = 100; // Maximum queued requests
+const MAX_PRIORITY_QUEUE_SIZE = 50; // Maximum priority queued requests
 const QUEUE_TIMEOUT_MS = 30000; // 30 seconds max wait time
+const PRIORITY_QUEUE_TIMEOUT_MS = 15000; // 15 seconds max wait for priority
 const POLL_INTERVAL_MS = 50; // Check queue every 50ms
+
+// Redis keys for priority queue
+const PRIORITY_QUEUE_KEY = `${REDIS_KEYS.PISTON_QUEUE}:priority`;
 
 interface QueuedRequest {
   id: string;
@@ -24,11 +33,14 @@ interface QueuedRequest {
   language: string;
   input: string;
   timestamp: number;
+  priority?: boolean;
+  timeoutSeconds?: number;
 }
 
 interface QueuePosition {
   position: number;
   estimatedWaitMs: number;
+  isPriority: boolean;
 }
 
 /**
@@ -82,37 +94,61 @@ async function recordRequest(): Promise<void> {
 }
 
 /**
- * Add a request to the queue
+ * Add a request to the queue (regular or priority)
  */
-async function addToQueue(request: QueuedRequest): Promise<number> {
+async function addToQueue(request: QueuedRequest, priority: boolean = false): Promise<number> {
   const redis = getRedisClient();
+  const queueKey = priority ? PRIORITY_QUEUE_KEY : REDIS_KEYS.PISTON_QUEUE;
+  const maxSize = priority ? MAX_PRIORITY_QUEUE_SIZE : MAX_QUEUE_SIZE;
   
   // Check queue size
-  const queueSize = await redis.llen(REDIS_KEYS.PISTON_QUEUE);
-  if (queueSize >= MAX_QUEUE_SIZE) {
-    throw new Error("Execution queue is full. Please try again later.");
+  const queueSize = await redis.llen(queueKey);
+  if (queueSize >= maxSize) {
+    throw new Error(priority 
+      ? "Priority queue is full. Please try again in a moment."
+      : "Execution queue is full. Please try again later."
+    );
   }
   
+  // Mark the request with priority flag
+  request.priority = priority;
+  
   // Add to queue
-  await redis.rpush(REDIS_KEYS.PISTON_QUEUE, JSON.stringify(request));
+  await redis.rpush(queueKey, JSON.stringify(request));
   
   return queueSize + 1;
 }
 
 /**
- * Get queue position for a request
+ * Get queue position for a request (checks both priority and regular queues)
  */
 async function getQueuePosition(requestId: string): Promise<QueuePosition | null> {
   const redis = getRedisClient();
   
-  const queue = await redis.lrange(REDIS_KEYS.PISTON_QUEUE, 0, -1);
-  
-  for (let i = 0; i < queue.length; i++) {
-    const item = JSON.parse(queue[i]) as QueuedRequest;
+  // Check priority queue first
+  const priorityQueue = await redis.lrange(PRIORITY_QUEUE_KEY, 0, -1);
+  for (let i = 0; i < priorityQueue.length; i++) {
+    const item = JSON.parse(priorityQueue[i]) as QueuedRequest;
     if (item.id === requestId) {
       return {
         position: i + 1,
         estimatedWaitMs: Math.ceil((i + 1) / RATE_LIMIT) * WINDOW_SIZE_MS,
+        isPriority: true,
+      };
+    }
+  }
+  
+  // Check regular queue
+  const regularQueue = await redis.lrange(REDIS_KEYS.PISTON_QUEUE, 0, -1);
+  for (let i = 0; i < regularQueue.length; i++) {
+    const item = JSON.parse(regularQueue[i]) as QueuedRequest;
+    if (item.id === requestId) {
+      // Position accounts for priority queue items ahead
+      const effectivePosition = priorityQueue.length + i + 1;
+      return {
+        position: effectivePosition,
+        estimatedWaitMs: Math.ceil(effectivePosition / RATE_LIMIT) * WINDOW_SIZE_MS,
+        isPriority: false,
       };
     }
   }
@@ -121,7 +157,7 @@ async function getQueuePosition(requestId: string): Promise<QueuePosition | null
 }
 
 /**
- * Process the next item in the queue
+ * Process the next item in the queue (priority queue first)
  */
 async function processQueueItem(): Promise<{ request: QueuedRequest; result: ExecutionResult } | null> {
   const redis = getRedisClient();
@@ -131,16 +167,25 @@ async function processQueueItem(): Promise<{ request: QueuedRequest; result: Exe
     return null;
   }
   
-  // Pop from queue
-  const item = await redis.lpop(REDIS_KEYS.PISTON_QUEUE);
+  // Try priority queue first
+  let item = await redis.lpop(PRIORITY_QUEUE_KEY);
+  let isPriority = true;
+  
+  // Fall back to regular queue if priority is empty
+  if (!item) {
+    item = await redis.lpop(REDIS_KEYS.PISTON_QUEUE);
+    isPriority = false;
+  }
+  
   if (!item) {
     return null;
   }
   
   const request = JSON.parse(item) as QueuedRequest;
+  const timeoutMs = isPriority ? PRIORITY_QUEUE_TIMEOUT_MS : QUEUE_TIMEOUT_MS;
   
   // Check if request has timed out
-  if (Date.now() - request.timestamp > QUEUE_TIMEOUT_MS) {
+  if (Date.now() - request.timestamp > timeoutMs) {
     // Skip timed out requests
     return null;
   }
@@ -148,8 +193,9 @@ async function processQueueItem(): Promise<{ request: QueuedRequest; result: Exe
   // Record the request in rate limit window
   await recordRequest();
   
-  // Execute
-  const result = await directExecuteCode(request.code, request.language, request.input);
+  // Execute with the request's timeout setting
+  const timeoutSeconds = request.timeoutSeconds || 10;
+  const result = await directExecuteCode(request.code, request.language, request.input, timeoutSeconds);
   
   // Store result in Redis for retrieval
   const resultKey = `${REDIS_KEYS.EXECUTION_RESULT}${request.id}`;
@@ -233,11 +279,19 @@ export function stopQueueProcessor(): void {
  * If under rate limit, executes immediately.
  * If over rate limit, queues the request and waits for result.
  * Falls back to direct execution if Redis is unavailable.
+ * 
+ * @param code - The code to execute
+ * @param language - Programming language
+ * @param input - Standard input for the program
+ * @param timeoutSeconds - Execution timeout (default: 10s free, 30s pro)
+ * @param priority - Whether to use priority queue (Pro users)
  */
 export async function executeCodeRateLimited(
   code: string,
   language: string,
-  input: string = ""
+  input: string = "",
+  timeoutSeconds: number = 10,
+  priority: boolean = false
 ): Promise<ExecutionResult> {
   // Check if Redis is available
   const redisAvailable = await isRedisAvailable();
@@ -245,17 +299,18 @@ export async function executeCodeRateLimited(
   if (!redisAvailable) {
     // Fall back to direct execution without rate limiting
     console.warn("Redis unavailable, executing without rate limiting");
-    return directExecuteCode(code, language, input);
+    return directExecuteCode(code, language, input, timeoutSeconds);
   }
   
   // Check rate limit
   if (await canMakeRequest()) {
     // Under limit - execute immediately
     await recordRequest();
-    return directExecuteCode(code, language, input);
+    return directExecuteCode(code, language, input, timeoutSeconds);
   }
   
   // Over limit - queue the request
+  // Priority users go to the priority queue which is processed first
   const requestId = generateRequestId();
   const request: QueuedRequest = {
     id: requestId,
@@ -263,16 +318,19 @@ export async function executeCodeRateLimited(
     language,
     input,
     timestamp: Date.now(),
+    priority,
+    timeoutSeconds,
   };
   
-  const position = await addToQueue(request);
-  console.log(`Request ${requestId} queued at position ${position}`);
+  const position = await addToQueue(request, priority);
+  console.log(`Request ${requestId} queued at position ${position}${priority ? ' (PRIORITY)' : ''}`);
   
   // Start processor if not running
   startQueueProcessor();
   
-  // Wait for result
-  return waitForResult(requestId);
+  // Wait for result (priority has shorter timeout since queue is smaller)
+  const waitTimeout = priority ? PRIORITY_QUEUE_TIMEOUT_MS : QUEUE_TIMEOUT_MS;
+  return waitForResult(requestId, waitTimeout);
 }
 
 /**
@@ -282,6 +340,7 @@ export async function getRateLimitStatus(): Promise<{
   requestsInWindow: number;
   limit: number;
   queueSize: number;
+  priorityQueueSize: number;
   available: boolean;
 }> {
   const redisAvailable = await isRedisAvailable();
@@ -291,6 +350,7 @@ export async function getRateLimitStatus(): Promise<{
       requestsInWindow: 0,
       limit: RATE_LIMIT,
       queueSize: 0,
+      priorityQueueSize: 0,
       available: false,
     };
   }
@@ -304,11 +364,13 @@ export async function getRateLimitStatus(): Promise<{
   
   const requestsInWindow = await redis.zcard(REDIS_KEYS.PISTON_RATE_LIMIT);
   const queueSize = await redis.llen(REDIS_KEYS.PISTON_QUEUE);
+  const priorityQueueSize = await redis.llen(PRIORITY_QUEUE_KEY);
   
   return {
     requestsInWindow,
     limit: RATE_LIMIT,
     queueSize,
+    priorityQueueSize,
     available: true,
   };
 }

@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
-import { Code2, Swords, Bot, Users, Clock, Trophy, Zap, Search } from "lucide-react";
+import { Swords, Bot, Users, Clock, Trophy, Zap, Search } from "lucide-react";
+import Navbar from "@/components/layout/Navbar";
 
 const LANGUAGES = [
   { value: "python", label: "Python", icon: "🐍" },
@@ -261,30 +262,7 @@ export default function DuelsPage() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      {/* Header */}
-      <header className="border-b border-gray-800 bg-gray-900/50 backdrop-blur">
-        <nav className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Code2 className="h-8 w-8 text-blue-500" />
-            <span className="text-2xl font-bold text-white">CodeComp</span>
-          </Link>
-          <div className="flex items-center gap-4">
-            <Link
-              href="/leaderboard/skill"
-              className="text-gray-400 hover:text-white flex items-center gap-1"
-            >
-              <Trophy className="h-4 w-4" />
-              Skill Leaderboard
-            </Link>
-            <Link
-              href="/dashboard"
-              className="px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700"
-            >
-              Dashboard
-            </Link>
-          </div>
-        </nav>
-      </header>
+      <Navbar />
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         <div className="text-center mb-8">

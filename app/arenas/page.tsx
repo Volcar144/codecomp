@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSession } from "@/lib/auth-client";
 import { Loading } from "@/components/ui/Loading";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
+import Navbar from "@/components/layout/Navbar";
 
 interface Arena {
   id: string;
@@ -90,6 +91,8 @@ export default function ArenasPage() {
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
+      <Navbar />
+      
       <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="flex justify-between items-center mb-8">
           <div>

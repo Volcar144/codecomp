@@ -9,6 +9,7 @@
  * - Expired GitHub tokens
  * - Old skill rating history (keep last 100 per user)
  * - Resolved challenge reports (90+ days)
+ * - History retention cleanup (7 days free, 90 days pro)
  * 
  * Recommended schedule: Once per day
  * cron-job.org URL: https://yourapp.com/api/cron/cleanup
@@ -18,6 +19,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { verifyCronRequest } from "@/lib/cron-auth";
 import { trackAPIRequest } from "@/lib/api-monitoring";
+import { runHistoryCleanup } from "@/lib/history-cleanup";
 
 export async function GET(request: NextRequest) {
   const startTime = Date.now();
@@ -54,11 +56,23 @@ export async function GET(request: NextRequest) {
       }
     });
 
+    // Run history retention cleanup (based on subscription plans)
+    let historyCleanupResult = null;
+    try {
+      historyCleanupResult = await runHistoryCleanup();
+      console.log(`  - history_retention: ${historyCleanupResult.executionLogsDeleted + historyCleanupResult.submissionsArchived} items`);
+    } catch (historyError) {
+      console.error('History cleanup error:', historyError);
+    }
+
     const response = NextResponse.json({
       success: true,
       timestamp: new Date().toISOString(),
-      total_items_cleaned: totalCleaned,
+      total_items_cleaned: totalCleaned + (historyCleanupResult 
+        ? historyCleanupResult.executionLogsDeleted + historyCleanupResult.submissionsArchived 
+        : 0),
       results,
+      historyCleanup: historyCleanupResult,
     });
     trackAPIRequest("/api/cron/cleanup", "GET", 200, Date.now() - startTime);
     return response;
