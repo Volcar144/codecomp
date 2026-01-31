@@ -893,3 +893,62 @@ export async function sendFamilyInviteEmail(
   }
 }
 
+/**
+ * Send organization invitation email (for BetterAuth organization plugin)
+ */
+export async function sendOrganizationInvitationEmail(
+  email: string,
+  data: {
+    inviterName: string;
+    organizationName: string;
+    role: string;
+    invitationLink: string;
+  }
+): Promise<void> {
+  const fromEmail = process.env.EMAIL_FROM || 'noreply@codecomp.com';
+  
+  if (!transporter) {
+    console.log(`[DEV] Organization invite email for ${email}`);
+    console.log(`[DEV] Inviter: ${data.inviterName}, Org: ${data.organizationName}, Role: ${data.role}`);
+    console.log(`[DEV] Link: ${data.invitationLink}`);
+    return;
+  }
+
+  const roleDisplay = data.role.charAt(0).toUpperCase() + data.role.slice(1);
+  
+  const content = `
+    <p>Hi there!</p>
+    
+    <p><strong>${data.inviterName}</strong> has invited you to join <strong>${data.organizationName}</strong> on CodeComp as a <strong>${roleDisplay}</strong>! 🎉</p>
+    
+    <div style="background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+      <p style="color: #ffffff; margin: 0; font-size: 18px;">Join ${data.organizationName}</p>
+      <p style="color: #dbeafe; margin: 10px 0 0 0; font-size: 14px;">Role: ${roleDisplay}</p>
+    </div>
+    
+    <h3 style="color: #111827;">What you'll get:</h3>
+    <ul style="color: #4b5563; line-height: 1.8;">
+      <li>✅ Access to team/family Pro benefits</li>
+      <li>✅ Unlimited code executions</li>
+      <li>✅ Priority execution queue</li>
+      <li>✅ 30-second execution timeout</li>
+      <li>✅ 90-day execution history</li>
+    </ul>
+    
+    <p style="color: #6b7280; font-size: 14px;">
+      Click the button below to accept the invitation and join ${data.organizationName}.
+    </p>
+  `;
+
+  try {
+    await transporter.sendMail({
+      from: fromEmail,
+      to: email,
+      subject: `🎉 You're invited to join ${data.organizationName} on CodeComp!`,
+      html: generateEmailTemplate(`Join ${data.organizationName}`, content, 'Accept Invitation', data.invitationLink),
+    });
+    console.log(`✅ Organization invite email sent to ${email}`);
+  } catch (error) {
+    console.error('Failed to send organization invite email:', error);
+  }
+}

@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { stripe } from "@better-auth/stripe";
+import { organization } from "better-auth/plugins";
 import Stripe from "stripe";
 import { 
   sendPasswordResetEmail, 
@@ -7,6 +8,7 @@ import {
   sendTrialStartedEmail,
   sendSubscriptionActivatedEmail,
   sendSubscriptionCanceledEmail,
+  sendOrganizationInvitationEmail,
 } from "./email";
 import { supabase } from "./supabase";
 import { Pool } from "pg";
@@ -56,10 +58,10 @@ const getUserEmailFromSubscription = async (
   }
 };
 
-export const auth = betterAuth({
-    database: new Pool({
-    connectionString: process.env.DATABASE_URL,
-  }),
+export const auth = betterAuth({ database: new Pool({ 
+        connectionString: process.env.DATABASE_URL 
+    }),
+  
   emailAndPassword: {
     enabled: true,
     // Password reset configuration
@@ -262,11 +264,66 @@ export const auth = betterAuth({
           }
         },
       },
+      // Enable organization subscriptions in Stripe
       organization: {
         enabled: true,
       },
     }),
-  ] : [],
+    // BetterAuth Organization Plugin for team/family management
+    organization({
+      // Allow any user to create an organization (Family or Team)
+      allowUserToCreateOrganization: true,
+      
+      // Invitation email configuration
+      sendInvitationEmail: async ({ invitation, inviter, organization }) => {
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+        const invitationLink = `${appUrl}/invite/accept?id=${invitation.id}`;
+        
+        await sendOrganizationInvitationEmail(invitation.email, {
+          inviterName: inviter.user.name || inviter.user.email,
+          organizationName: organization.name,
+          role: invitation.role,
+          invitationLink,
+        });
+      },
+      
+      // Teams feature for Team plan organizations
+      teams: {
+        enabled: true,
+        maximumTeams: 10, // Max 10 teams per organization
+      },
+      
+      // Default roles: owner, admin, member are built-in
+      // Organization deletion settings
+      organizationDeletion: {
+        disabled: false,
+      },
+    }),
+  ] : [
+    // Organization plugin even without Stripe (for development)
+    organization({
+      allowUserToCreateOrganization: true,
+      sendInvitationEmail: async ({ invitation, inviter, organization }) => {
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+        const invitationLink = `${appUrl}/invite/accept?id=${invitation.id}`;
+        
+        await sendOrganizationInvitationEmail(invitation.email, {
+          inviterName: inviter.user.name || inviter.user.email,
+          organizationName: organization.name,
+          role: invitation.role,
+          invitationLink,
+        });
+      },
+      teams: {
+        enabled: true,
+        maximumTeams: 10,
+      },
+      // Default roles: owner, admin, member are built-in
+      organizationDeletion: {
+        disabled: false,
+      },
+    }),
+  ],
 });
 
 export type Session = typeof auth.$Infer.Session;

@@ -59,7 +59,7 @@ export const PLAN_LIMITS: Record<SubscriptionPlan, PlanLimits> = {
 /**
  * Get user's current subscription plan from the database
  * BetterAuth stores subscriptions in the `subscription` table
- * Also checks for family/team membership
+ * Also checks for organization membership (family/team via BetterAuth organization plugin)
  */
 export async function getUserPlan(userId: string): Promise<SubscriptionPlan> {
   // If payment gating is disabled, return pro for all users
@@ -84,53 +84,56 @@ export async function getUserPlan(userId: string): Promise<SubscriptionPlan> {
       }
     }
 
-    // Check if user is a family member
-    const { data: familyMembership } = await supabase
-      .from('family_members')
-      .select('owner_user_id')
-      .eq('member_user_id', userId)
-      .eq('status', 'active')
-      .limit(1)
-      .single();
+    // Check if user is a member of an organization (family or team)
+    // BetterAuth creates a 'member' table for organization memberships
+    const { data: memberships, error: memberError } = await supabase
+      .from('member')
+      .select('organizationId, role')
+      .eq('userId', userId);
 
-    if (familyMembership) {
-      // Verify the owner still has an active family plan
-      const { data: ownerSubscription } = await supabase
-        .from('subscription')
-        .select('plan, status')
-        .eq('referenceId', familyMembership.owner_user_id)
-        .eq('plan', 'family')
-        .in('status', ['active', 'trialing'])
-        .limit(1)
-        .single();
+    if (!memberError && memberships && memberships.length > 0) {
+      // For each organization the user is a member of, check if it has an active subscription
+      for (const membership of memberships) {
+        // Get organization details to determine type (family or team)
+        const { data: org } = await supabase
+          .from('organization')
+          .select('id, name, metadata')
+          .eq('id', membership.organizationId)
+          .single();
 
-      if (ownerSubscription) {
-        return 'family'; // User gets family plan benefits
-      }
-    }
+        if (org) {
+          // Determine organization type from metadata
+          const metadata = org.metadata as Record<string, unknown> | null;
+          const orgType = metadata?.type as string;
+          
+          // Find the owner of the organization
+          const { data: ownerMember } = await supabase
+            .from('member')
+            .select('userId')
+            .eq('organizationId', org.id)
+            .eq('role', 'owner')
+            .single();
 
-    // Check if user is a team member
-    const { data: teamMembership } = await supabase
-      .from('team_members')
-      .select('team_id, teams(owner_user_id)')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .limit(1)
-      .single();
+          if (ownerMember) {
+            // Check if owner has an active family or team subscription
+            const expectedPlan = orgType === 'family' ? 'family' : orgType === 'team' ? 'team' : null;
+            
+            if (expectedPlan) {
+              const { data: ownerSubscription } = await supabase
+                .from('subscription')
+                .select('plan, status')
+                .eq('referenceId', ownerMember.userId)
+                .eq('plan', expectedPlan)
+                .in('status', ['active', 'trialing'])
+                .limit(1)
+                .single();
 
-    if (teamMembership && teamMembership.teams) {
-      const ownerUserId = (teamMembership.teams as unknown as { owner_user_id: string }).owner_user_id;
-      const { data: ownerSubscription } = await supabase
-        .from('subscription')
-        .select('plan, status')
-        .eq('referenceId', ownerUserId)
-        .eq('plan', 'team')
-        .in('status', ['active', 'trialing'])
-        .limit(1)
-        .single();
-
-      if (ownerSubscription) {
-        return 'team'; // User gets team plan benefits
+              if (ownerSubscription) {
+                return expectedPlan; // User gets plan benefits through org membership
+              }
+            }
+          }
+        }
       }
     }
 

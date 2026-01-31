@@ -1,51 +1,53 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useSession } from '@/lib/auth-client';
+import { useState, useEffect, useCallback } from 'react';
+import { useSession, authClient } from '@/lib/auth-client';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { 
   Building2, UserPlus, Crown, Mail, Trash2, Clock, CheckCircle, 
-  AlertCircle, Loader2, Copy, RefreshCw, ArrowLeft, X, Plus,
+  AlertCircle, Loader2, RefreshCw, ArrowLeft, X, Plus,
   Users, Settings, BarChart3, Shield
 } from 'lucide-react';
 
-interface TeamMember {
+// Types for organization plugin (matching BetterAuth's types)
+interface Member {
   id: string;
-  email: string;
-  name: string | null;
-  role: 'owner' | 'admin' | 'member';
-  status: 'active' | 'pending' | 'expired';
-  joinedAt: string | null;
-  invitedAt: string;
+  userId: string;
+  organizationId: string;
+  role: string;
+  createdAt: Date;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    image?: string;
+  };
 }
 
 interface Invitation {
   id: string;
   email: string;
-  role: 'admin' | 'member';
-  status: 'pending' | 'accepted' | 'expired';
-  createdAt: string;
-  expiresAt: string;
+  role: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'canceled';
+  expiresAt: Date;
+  organizationId: string;
 }
 
-interface TeamInfo {
+interface Organization {
   id: string;
   name: string;
   slug: string;
-  createdAt: string;
-  plan: {
-    includedSeats: number;
-    additionalSeats: number;
-    pricePerSeat: number;
-  };
+  logo?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: Date;
 }
 
 export default function TeamPage() {
   const { data: session, isPending } = useSession();
   const router = useRouter();
-  const [team, setTeam] = useState<TeamInfo | null>(null);
-  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [organization, setOrganization] = useState<Organization | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -57,11 +59,18 @@ export default function TeamPage() {
   const [showAddSeatsModal, setShowAddSeatsModal] = useState(false);
   const [seatsToAdd, setSeatsToAdd] = useState(1);
   const [activeTab, setActiveTab] = useState<'members' | 'settings' | 'billing'>('members');
+  const [isOwner, setIsOwner] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [teamName, setTeamName] = useState('');
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const BASE_SEATS = 5;
   const PRICE_PER_SEAT = 5;
-  const totalSeats = team ? team.plan.includedSeats + team.plan.additionalSeats : BASE_SEATS;
-  const usedSeats = members.filter(m => m.status === 'active').length;
+  // Get additional seats from org metadata
+  const additionalSeats = (organization?.metadata as Record<string, unknown>)?.additionalSeats as number || 0;
+  const totalSeats = BASE_SEATS + additionalSeats;
+  const usedSeats = members.length;
   const pendingInvites = invitations.filter(i => i.status === 'pending').length;
 
   useEffect(() => {
@@ -70,62 +79,136 @@ export default function TeamPage() {
     }
   }, [session, isPending, router]);
 
-  useEffect(() => {
-    if (session?.user) {
-      fetchTeamData();
+  const fetchOrganizationData = useCallback(async () => {
+    if (!session?.user) return;
+    
+    try {
+      setLoading(true);
+      setError(null);
+
+      // List user's organizations to find their team org
+      const { data: orgs, error: listError } = await authClient.organization.list();
+      
+      if (listError) {
+        console.error('Error listing organizations:', listError);
+        setOrganization(null);
+        setMembers([]);
+        setInvitations([]);
+        setLoading(false);
+        return;
+      }
+
+      // Find a team organization (by slug pattern or metadata)
+      const teamOrg = orgs?.find((org) => 
+        org.slug?.startsWith('team-') || 
+        (org.metadata as Record<string, unknown>)?.type === 'team'
+      );
+
+      if (teamOrg) {
+        setOrganization(teamOrg as Organization);
+        
+        // Set this as the active organization
+        await authClient.organization.setActive({
+          organizationId: teamOrg.id
+        });
+
+        // Get full organization details with members
+        const { data: fullOrg, error: fullError } = await authClient.organization.getFullOrganization();
+
+        if (fullError) {
+          console.error('Error getting full organization:', fullError);
+        } else if (fullOrg) {
+          setMembers((fullOrg.members || []) as Member[]);
+          setInvitations((fullOrg.invitations || []) as Invitation[]);
+          
+          // Check if current user is owner or admin
+          const currentMember = fullOrg.members?.find(
+            (m) => m.userId === session.user.id
+          );
+          setIsOwner(currentMember?.role === 'owner');
+          setIsAdmin(currentMember?.role === 'admin' || currentMember?.role === 'owner');
+        }
+      } else {
+        setOrganization(null);
+        setMembers([]);
+        setInvitations([]);
+      }
+    } catch (err) {
+      console.error('Error fetching organization data:', err);
+      setError('Failed to load team data');
+    } finally {
+      setLoading(false);
     }
   }, [session]);
 
-  const fetchTeamData = async () => {
+  useEffect(() => {
+    if (session?.user) {
+      fetchOrganizationData();
+    }
+  }, [session, fetchOrganizationData]);
+
+  const handleCreateTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!session?.user || !teamName.trim()) return;
+    
+    setCreating(true);
+    setError(null);
+
     try {
-      setLoading(true);
-      const res = await fetch('/api/team');
-      if (!res.ok) throw new Error('Failed to fetch team data');
-      const data = await res.json();
-      setTeam(data.team || null);
-      setMembers(data.members || []);
-      setInvitations(data.invitations || []);
-    } catch {
-      // If API doesn't exist yet, show empty state
-      setTeam({
-        id: 'mock',
-        name: 'My Team',
-        slug: 'my-team',
-        createdAt: new Date().toISOString(),
-        plan: { includedSeats: 5, additionalSeats: 0, pricePerSeat: 5 },
+      // Create a new team organization
+      const slug = `team-${teamName.toLowerCase().replace(/\s+/g, '-')}-${Date.now().toString(36)}`;
+      const { data: newOrg, error: createError } = await authClient.organization.create({
+        name: teamName,
+        slug,
+        metadata: { type: 'team', maxSeats: BASE_SEATS, additionalSeats: 0 }
       });
-      setMembers([]);
-      setInvitations([]);
+
+      if (createError) {
+        throw new Error(createError.message || 'Failed to create team');
+      }
+
+      setSuccess('Team created successfully!');
+      setShowCreateModal(false);
+      setTeamName('');
+      if (newOrg) {
+        setOrganization(newOrg as unknown as Organization);
+      }
+      fetchOrganizationData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create team');
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
   };
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inviteEmail) return;
+    if (!inviteEmail || !organization) return;
+    
+    if (usedSeats + pendingInvites >= totalSeats) {
+      setError('Maximum seats reached. Add more seats or remove a member first.');
+      return;
+    }
     
     setInviting(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const res = await fetch('/api/team/invite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+      const { error: inviteError } = await authClient.organization.inviteMember({
+        email: inviteEmail,
+        role: inviteRole,
+        organizationId: organization.id
       });
       
-      const data = await res.json();
-      
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to send invitation');
+      if (inviteError) {
+        throw new Error(inviteError.message || 'Failed to send invitation');
       }
       
       setSuccess(`Invitation sent to ${inviteEmail}!`);
       setInviteEmail('');
       setShowInviteModal(false);
-      fetchTeamData();
+      fetchOrganizationData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send invitation');
     } finally {
@@ -135,37 +218,92 @@ export default function TeamPage() {
 
   const handleRemoveMember = async (memberId: string) => {
     if (!confirm('Are you sure you want to remove this member from the team?')) return;
+    if (!organization) return;
     
     try {
-      const res = await fetch(`/api/team/members/${memberId}`, {
-        method: 'DELETE',
+      const { error: removeError } = await authClient.organization.removeMember({
+        memberIdOrEmail: memberId,
+        organizationId: organization.id
       });
       
-      if (!res.ok) throw new Error('Failed to remove member');
+      if (removeError) {
+        throw new Error(removeError.message || 'Failed to remove member');
+      }
       
       setSuccess('Member removed successfully');
-      fetchTeamData();
+      fetchOrganizationData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to remove member');
     }
   };
 
-  const handleAddSeats = async () => {
+  const handleCancelInvitation = async (invitationId: string) => {
+    if (!organization) return;
+    
     try {
-      const res = await fetch('/api/team/seats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seats: seatsToAdd }),
+      const { error: cancelError } = await authClient.organization.cancelInvitation({
+        invitationId
       });
       
-      if (!res.ok) throw new Error('Failed to add seats');
+      if (cancelError) {
+        throw new Error(cancelError.message || 'Failed to cancel invitation');
+      }
+      
+      setSuccess('Invitation canceled');
+      fetchOrganizationData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel invitation');
+    }
+  };
+
+  const handleAddSeats = async () => {
+    if (!organization) return;
+    
+    try {
+      // Update organization metadata with additional seats
+      // Note: In production, this should trigger a Stripe subscription update
+      const currentAdditional = (organization.metadata as Record<string, unknown>)?.additionalSeats as number || 0;
+      const { error: updateError } = await authClient.organization.update({
+        organizationId: organization.id,
+        data: {
+          metadata: {
+            ...organization.metadata,
+            additionalSeats: currentAdditional + seatsToAdd
+          }
+        }
+      });
+      
+      if (updateError) {
+        throw new Error(updateError.message || 'Failed to add seats');
+      }
       
       setSuccess(`Added ${seatsToAdd} seat(s) to your team!`);
       setShowAddSeatsModal(false);
       setSeatsToAdd(1);
-      fetchTeamData();
+      fetchOrganizationData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add seats');
+    }
+  };
+
+  const handleUpdateSettings = async () => {
+    if (!organization) return;
+    
+    try {
+      const { error: updateError } = await authClient.organization.update({
+        organizationId: organization.id,
+        data: {
+          name: organization.name
+        }
+      });
+      
+      if (updateError) {
+        throw new Error(updateError.message || 'Failed to update settings');
+      }
+      
+      setSuccess('Settings saved successfully');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save settings');
     }
   };
 
@@ -185,6 +323,100 @@ export default function TeamPage() {
     );
   }
 
+  // No team yet - show create team view
+  if (!loading && !organization) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-white">
+        <div className="max-w-2xl mx-auto p-6">
+          <Link href="/dashboard" className="text-gray-400 hover:text-white flex items-center gap-2 mb-8">
+            <ArrowLeft className="w-4 h-4" />
+            Back to Dashboard
+          </Link>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/50 text-red-400 rounded-lg p-4 mb-6 flex items-center gap-3">
+              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <p>{error}</p>
+              <button onClick={() => setError(null)} className="ml-auto"><X className="w-4 h-4" /></button>
+            </div>
+          )}
+
+          <div className="text-center py-12">
+            <div className="w-20 h-20 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+              <Building2 className="w-10 h-10 text-blue-400" />
+            </div>
+            <h1 className="text-3xl font-bold mb-4">Create Your Team</h1>
+            <p className="text-gray-400 mb-8 max-w-md mx-auto">
+              Set up a team to collaborate with up to 5 members (expandable). 
+              Team members get full access to Pro features.
+            </p>
+            
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="px-8 py-4 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold transition flex items-center gap-2 mx-auto"
+            >
+              <Plus className="w-5 h-5" />
+              Create Team
+            </button>
+
+            <p className="text-sm text-gray-500 mt-4">
+              Team plan: $25/month base + $5/additional seat
+            </p>
+          </div>
+
+          {/* Create Team Modal */}
+          {showCreateModal && (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+              <div className="bg-gray-900 rounded-xl p-6 max-w-md w-full border border-gray-800">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <Building2 className="w-5 h-5 text-blue-400" />
+                    Create Team
+                  </h3>
+                  <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-white">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                
+                <form onSubmit={handleCreateTeam}>
+                  <div className="mb-6">
+                    <label className="block text-sm text-gray-400 mb-2">Team Name</label>
+                    <input
+                      type="text"
+                      value={teamName}
+                      onChange={(e) => setTeamName(e.target.value)}
+                      placeholder="Acme Engineering"
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500"
+                      required
+                    />
+                  </div>
+                  
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateModal(false)}
+                      className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={creating || !teamName.trim()}
+                      className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                      Create
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <div className="max-w-5xl mx-auto p-6">
@@ -198,7 +430,7 @@ export default function TeamPage() {
             <div>
               <h1 className="text-3xl font-bold flex items-center gap-3">
                 <Building2 className="w-8 h-8 text-blue-400" />
-                {team?.name || 'Team'}
+                {organization?.name || 'Team'}
               </h1>
               <p className="text-gray-400 mt-2">
                 Manage your team members and subscription
@@ -326,7 +558,7 @@ export default function TeamPage() {
                 </h2>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={fetchTeamData}
+                    onClick={fetchOrganizationData}
                     className="p-2 text-gray-400 hover:text-white transition"
                     title="Refresh"
                   >
@@ -355,20 +587,24 @@ export default function TeamPage() {
                     <div key={member.id} className="p-4 flex items-center justify-between">
                       <div className="flex items-center gap-4">
                         <div className="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center">
-                          <span className="text-lg font-medium">
-                            {(member.name || member.email)[0].toUpperCase()}
-                          </span>
+                          {member.user.image ? (
+                            <img src={member.user.image} alt="" className="w-10 h-10 rounded-full" />
+                          ) : (
+                            <span className="text-lg font-medium">
+                              {(member.user.name || member.user.email)[0].toUpperCase()}
+                            </span>
+                          )}
                         </div>
                         <div>
-                          <div className="font-medium">{member.name || 'Unknown'}</div>
-                          <div className="text-sm text-gray-400">{member.email}</div>
+                          <div className="font-medium">{member.user.name || 'Unknown'}</div>
+                          <div className="text-sm text-gray-400">{member.user.email}</div>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${getRoleBadgeColor(member.role)}`}>
                           {member.role}
                         </span>
-                        {member.role !== 'owner' && (
+                        {member.role !== 'owner' && isAdmin && (
                           <button
                             onClick={() => handleRemoveMember(member.id)}
                             className="p-2 text-gray-400 hover:text-red-400 transition"
@@ -400,13 +636,15 @@ export default function TeamPage() {
                         <span className="px-2 py-1 bg-yellow-500/20 text-yellow-400 rounded text-xs font-medium">
                           {invite.role}
                         </span>
-                        <button
-                          onClick={() => {/* handleCancelInvite(invite.id) */}}
-                          className="p-2 text-gray-400 hover:text-red-400 transition"
-                          title="Cancel invitation"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleCancelInvitation(invite.id)}
+                            className="p-2 text-gray-400 hover:text-red-400 transition"
+                            title="Cancel invitation"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -448,8 +686,10 @@ export default function TeamPage() {
                 <label className="block text-sm text-gray-400 mb-2">Team Name</label>
                 <input
                   type="text"
-                  defaultValue={team?.name || ''}
+                  defaultValue={organization?.name || ''}
+                  onChange={(e) => setOrganization(organization ? { ...organization, name: e.target.value } : null)}
                   className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500"
+                  disabled={!isAdmin}
                 />
               </div>
               
@@ -459,10 +699,12 @@ export default function TeamPage() {
                   <span className="text-gray-500">codecomp.dev/team/</span>
                   <input
                     type="text"
-                    defaultValue={team?.slug || ''}
+                    defaultValue={organization?.slug || ''}
                     className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500"
+                    disabled
                   />
                 </div>
+                <p className="text-xs text-gray-500 mt-1">Team URL cannot be changed after creation</p>
               </div>
 
               <div className="pt-4 border-t border-gray-800">
@@ -471,14 +713,19 @@ export default function TeamPage() {
                   Security Settings
                 </h3>
                 <label className="flex items-center gap-3 cursor-pointer">
-                  <input type="checkbox" className="w-4 h-4 rounded bg-gray-800 border-gray-700" />
+                  <input type="checkbox" className="w-4 h-4 rounded bg-gray-800 border-gray-700" disabled={!isAdmin} />
                   <span className="text-sm">Require admin approval for new members</span>
                 </label>
               </div>
 
-              <button className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition">
-                Save Settings
-              </button>
+              {isAdmin && (
+                <button 
+                  onClick={handleUpdateSettings}
+                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition"
+                >
+                  Save Settings
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -491,11 +738,11 @@ export default function TeamPage() {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <div className="text-gray-400">Base seats</div>
-                  <div className="text-lg font-semibold">{team?.plan.includedSeats || 5}</div>
+                  <div className="text-lg font-semibold">{BASE_SEATS}</div>
                 </div>
                 <div>
                   <div className="text-gray-400">Additional seats</div>
-                  <div className="text-lg font-semibold">{team?.plan.additionalSeats || 0}</div>
+                  <div className="text-lg font-semibold">{additionalSeats}</div>
                 </div>
                 <div>
                   <div className="text-gray-400">Base price</div>
@@ -503,14 +750,14 @@ export default function TeamPage() {
                 </div>
                 <div>
                   <div className="text-gray-400">Additional seats cost</div>
-                  <div className="text-lg font-semibold">${(team?.plan.additionalSeats || 0) * PRICE_PER_SEAT}/month</div>
+                  <div className="text-lg font-semibold">${additionalSeats * PRICE_PER_SEAT}/month</div>
                 </div>
               </div>
               <div className="mt-4 pt-4 border-t border-blue-500/30">
                 <div className="flex items-center justify-between">
                   <div className="text-gray-400">Total monthly</div>
                   <div className="text-2xl font-bold">
-                    ${25 + (team?.plan.additionalSeats || 0) * PRICE_PER_SEAT}
+                    ${25 + additionalSeats * PRICE_PER_SEAT}
                   </div>
                 </div>
               </div>

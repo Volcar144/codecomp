@@ -1,5 +1,6 @@
 import { createAuthClient } from "better-auth/react";
 import { stripeClient } from "@better-auth/stripe/client";
+import { organizationClient } from "better-auth/client/plugins";
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
@@ -8,7 +9,12 @@ export const authClient = createAuthClient({
   plugins: [
     stripeClient({
       subscription: true
-    })
+    }),
+    organizationClient({
+      teams: {
+        enabled: true
+      }
+    }),
   ],
 });
 
@@ -20,6 +26,9 @@ export const resetPassword = authClient.resetPassword;
 
 // Export subscription namespace from authClient
 export const subscription = authClient.subscription;
+
+// Export organization namespace from authClient
+export const organization = authClient.organization;
 
 
 // Helper types
